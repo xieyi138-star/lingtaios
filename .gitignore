@@ -1,0 +1,8 @@
+brain/
+site/
+roots.json
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc

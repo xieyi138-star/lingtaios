@@ -1,0 +1,9 @@
+{
+  "_说明": "复制为 roots.json 按本机填。别名对应 装配图.md 里的 {NEXUS}/{D}/{HOME}；{SKILLS} 自动 = 本仓库根，不用填。没有的根填 null。",
+  "machine_id": "我的机器名（团队预留字段，多机数据靠它分开）",
+  "roots": {
+    "NEXUS": "C:\\nexus_local",
+    "D": "D:\\",
+    "HOME": "C:\\Users\\<用户名>"
+  }
+}

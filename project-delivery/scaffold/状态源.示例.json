@@ -1,0 +1,73 @@
+{
+  "_说明": "复制本文件改名为 状态源.json，按自己项目填。只声明真源在哪，不写任何数字。",
+  "_红线": "凡是 type=declared 的项都会被标 🟡 人工声明——那不是自动取数，是暂时的欠账，能自动化就自动化掉。",
+
+  "project": "示例项目",
+  "root": "..",
+
+  "probes": [
+    {
+      "name": "道·原理数",
+      "type": "py_attr_len",
+      "module": "src/principles.py",
+      "attr": "PRINCIPLES",
+      "_注": "真源在代码常量里时用这个。expect 可选：填了就是对账闸，漂了报红。"
+    },
+    {
+      "name": "法·已写格数",
+      "type": "file_count",
+      "glob": "docs/法-*.md"
+    },
+    {
+      "name": "术·判据数",
+      "type": "regex_count",
+      "glob": "src/**/gates*.py",
+      "pattern": "^def check_",
+      "_注": "这个数要和「法·已写格数」一起看——判据涨得比法快，就是在错误的层上干活。"
+    },
+    {
+      "name": "器·一次性脚本数",
+      "type": "file_count",
+      "glob": "**/_*.py",
+      "_注": "器膨胀是病征不是成绩。这个数只该降不该涨。"
+    },
+    {
+      "name": "产物·成件数",
+      "type": "file_count",
+      "glob": "out/**/*.json"
+    },
+    {
+      "name": "待办·条数",
+      "type": "regex_count",
+      "glob": "brain/04_待办池.md",
+      "pattern": "^\\| \\*\\*"
+    }
+  ],
+
+  "health": [
+    {
+      "name": "判据 / 法",
+      "numerator": "术·判据数",
+      "denominator": "法·已写格数",
+      "alarm": "⛔ 上升即警报——判据的数量应随法的完善而减少。若在增加，说明在错误的层上干活。"
+    }
+  ],
+
+  "outcomes": [
+    {
+      "name": "<终极指标一>",
+      "measurable": false,
+      "note": "填：谁测 / 何时测 / 达标线。⛔ 落在系统身上的量（良率/通过率/覆盖率）不是终极指标，是过程量，不许进这张表。"
+    },
+    {
+      "name": "<终极指标二>",
+      "measurable": false,
+      "note": ""
+    },
+    {
+      "name": "<终极指标三>",
+      "measurable": false,
+      "note": ""
+    }
+  ]
+}
