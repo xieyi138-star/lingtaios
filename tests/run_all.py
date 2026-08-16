@@ -115,6 +115,12 @@ def main():
 
     results = []
     try:
+        # ⛔ 跑的过程中别用浏览器开 8765。stress_a/stress_b 验的就是端口独占和并发，
+        #    人这时候连上去，红灯是自己造的——实测因此假红一次，白排查一轮。
+        print("⛔ 接下来几分钟别用浏览器打开 8765，也别手动起 exe——")
+        print("   stress_a/stress_b 正在验端口独占与并发，你连上去会让它假红。")
+        print("   跑完 runner 会自动把服务起回来。")
+        print()
         print("=== 常规回归（每个跑完都会清掉 8765）===")
         for s in SUITE:
             results.append(run(s))

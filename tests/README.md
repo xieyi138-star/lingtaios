@@ -45,7 +45,7 @@ Start-Process dist\lingtaios.exe -WorkingDirectory dist
 | `two_form_parity.py` | **两态一致性**：同一份 roots，源码态 vs exe 态 21 项逐项比 | 18 一致，0 个不该有的差异 |
 | `native_pick_e2e.py` | 原生文件夹对话框能弹、置顶、拿到真实路径 | 6/6 |
 | `pick_lock_test.py` | 对话框开着时重复点被拒（409），不弹第二个 | 4/4 |
-| `nav_check.py` | 侧栏文案在 exe 里正确 | 全 PASS |
+| `nav_check.py` | 侧栏文案在 exe 里正确 + 进化审计的「判据强度」是只读小节（不能混进勾选删除的清单，否则等于叫人删掉判据弱的坑，正好判反） | 全 PASS |
 | `detail_live_check.py` | 对着正在跑的服务，把每个项目详情逐个打开 | 全 200 |
 | `repo_parity.py` | **两仓红线**：发布镜像仓同名文件与主源码逐字节一致，且主源码无未登记去向的文件 | 全 PASS |
 | `clone_smoke.py` | **坑库 P23 的执行者**：真 clone 发布仓 HEAD，装→跑→打包→自检四步全走，并扫有没有作者的真实用户名 | 全 PASS |
