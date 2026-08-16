@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 
@@ -27,10 +28,22 @@ import mdlite  # noqa: E402
 # PyInstaller onefile 适配：exe 所在目录 = 用户数据（roots.json/site/）；解包目录 = 只读资产（web/方法真源）
 _FROZEN = getattr(sys, "frozen", False)
 if _FROZEN and os.name == "nt":
-    # exe 控制台走 GBK（中文 Windows 默认代码页），否则中文消息乱码
+    # 跟随控制台**实际**的输出代码页，不写死。
+    # 中文 Windows 默认 936(GBK)，但 Win11 新终端 / VS Code / 跑过 chcp 65001 的窗口是 UTF-8。
+    # 写死任何一边，都会在另一边把中文变成乱码——GBK 曾是写死的那一边。
+    enc = "gbk"
     try:
-        sys.stdout.reconfigure(encoding="gbk", errors="replace")
-        sys.stderr.reconfigure(encoding="gbk", errors="replace")
+        import codecs
+        import ctypes
+        cp = ctypes.windll.kernel32.GetConsoleOutputCP()  # 无控制台时返回 0
+        if cp:
+            codecs.lookup("cp%d" % cp)  # 不认识就抛 LookupError，留在 gbk
+            enc = "cp%d" % cp           # cp936=GBK  cp65001=UTF-8
+    except (OSError, AttributeError, LookupError):
+        pass
+    try:
+        sys.stdout.reconfigure(encoding=enc, errors="replace")
+        sys.stderr.reconfigure(encoding=enc, errors="replace")
     except (AttributeError, OSError):
         pass
 if _FROZEN:
@@ -46,6 +59,14 @@ PITFALL = os.path.join(REPO, "project-delivery", "坑库.md")
 SITE = os.path.join(HERE, "site")
 WEB = os.path.join(BUNDLE, "web") if BUNDLE else os.path.join(HERE, "web")
 ROOTS_FILE = os.path.join(HERE, "roots.json")
+# --roots-file 是「演练/多机配置」用的。它以前只在启动时读一次，写回的却永远是
+# ROOTS_FILE——演练一跑就污染真配置（实测把两个临时目录写进了本机 roots.json）。
+# 演练不许碰真源：落点存成全局，读和写都认它。
+ACTIVE_ROOTS_FILE = ROOTS_FILE
+# 产物落点同样要跟着演练走。只挪配置不挪产物，演练照样会把 site/data.json 写花——
+# 实测：一次向导演练把本机 22 个项目的快照冲成了 5 个临时目录。
+# 「演练不许碰真源」要连产物一起算，否则堵一半等于没堵。
+ACTIVE_SITE = SITE
 METHOD_DOCS = [
     ("常驻薄核", os.path.join(REPO, "project-delivery", "常驻薄核.md")),
     ("道法术", os.path.join(REPO, "project-delivery", "道法术.md")),
@@ -59,7 +80,7 @@ ALIASES = {"SKILLS", "NEXUS", "D", "HOME"}
 
 
 def load_roots(path=None):
-    p = path or ROOTS_FILE
+    p = path or ACTIVE_ROOTS_FILE
     if not os.path.isfile(p):
         print("[XX] 缺 roots.json（%s）—— 先跑：python -X utf8 install.py" % p)
         sys.exit(2)
@@ -67,6 +88,13 @@ def load_roots(path=None):
         d = json.load(f)
     r = dict(d.get("roots", {}))
     r["machine_id"] = d.get("machine_id", "")
+    # 老 roots.json 没有 setup_done → 当作已完成，不给现有用户弹向导
+    r["_setup_done"] = bool(d.get("setup_done", True))
+    # 工作区 = 装项目的目录，它底下一层就是项目。比逐个登记项目强在「动态」：
+    # 以后在工作区里新建项目会自动出现，不用回来改配置。
+    r["_workspaces"] = list(d.get("workspaces", []) or [])
+    r["_projects"] = list(d.get("projects", []) or [])      # 工作区之外单独加的
+    r["_excluded"] = [os.path.normcase(x) for x in (d.get("excluded", []) or [])]
     return r
 
 
@@ -258,7 +286,7 @@ def api_create_project(data):
     _register_in_map("### L6", "| `%s` | 项目层 | 向导创建 %s |" % (map_row, time.strftime("%Y-%m-%d")))
     # 重建 data.json，项目页立即可见
     try:
-        build(load_roots(), SITE)
+        build(load_roots(), ACTIVE_SITE)
     except Exception:
         pass
     return 200, {"ok": True, "path": target, "organs": SCAFFOLD_FILES,
@@ -282,7 +310,7 @@ def api_install_organs(data):
     _register_in_map("### L6", "| `%s` | 项目层 | 一键装系统 %s |" % (
         _alias_row(target, roots), time.strftime("%Y-%m-%d")))
     try:
-        build(load_roots(), SITE)
+        build(load_roots(), ACTIVE_SITE)
     except Exception:
         pass
     return 200, {"ok": True, "path": target, "organs": SCAFFOLD_FILES,
@@ -322,7 +350,7 @@ def api_add_pitfall(data):
     with io.open(PITFALL, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     try:
-        build(load_roots(), SITE)
+        build(load_roots(), ACTIVE_SITE)
     except Exception:
         pass
     return 200, {"ok": True, "code": code}
@@ -346,7 +374,7 @@ def api_audit_delete(data):
         with io.open(PITFALL, "w", encoding="utf-8") as f:
             f.write("\n".join(keep))
         try:
-            build(load_roots(), SITE)
+            build(load_roots(), ACTIVE_SITE)
         except Exception:
             pass
         return 200, {"ok": True, "removed": removed}
@@ -364,7 +392,7 @@ def api_audit_delete(data):
         with io.open(todo_p, "w", encoding="utf-8") as f:
             f.write("\n".join(keep))
         try:
-            build(load_roots(), SITE)
+            build(load_roots(), ACTIVE_SITE)
         except Exception:
             pass
         return 200, {"ok": True, "removed": removed}
@@ -439,14 +467,726 @@ def _register_in_map(section_marker, new_row):
             f.write("\n".join(lines))
 
 
+# ── 首跑向导：让用户指自己的目录，而不是猜 ─────────────────────
+# 扫描代价实测（本机，含下面这份排除清单）：C:\ 深度3 = 0.1s/385 目录，
+# 深度4 = 0.4s/1431；D:\ 深度3 = 0.2s/737。深度 4 候选涨到 138 噪声明显变多，
+# 所以默认深度 3——够扫到 sandbox 下面一层的项目，又不至于把整盘的 README 都端上来。
+SCAN_SKIP = {
+    "windows", "program files", "program files (x86)", "programdata", "recovery",
+    "$recycle.bin", "system volume information", "appdata", "node_modules",
+    "__pycache__", "temp", "tmp", "perflogs", "$windows.~ws", "onedrivetemp",
+    "site-packages", "venv", ".venv", "dist", "build", "vendor", "web",
+    "brain",  # 六器官目录，属于它的父项目，不是独立项目（检器官靠 listdir，不用遍历进去）
+    "users", "documents and settings", "public", "default",  # 系统目录，不是谁的工作区
+}
+ORGAN_HINT = ("00_宪法.md", "01_法典.md", "02_状态.md", "05_交接.md")
+# 路径里出现这些段 = 软件把插件/扩展装在这儿，里面是别人的东西不是你的项目
+SOFTWARE_SEG = {"custom_nodes", "extensions", "plugins", "addons", "bower_components", "packages"}
+
+ENGINEER_FILES = ("package.json", "pyproject.toml", "requirements.txt", "setup.py",
+                  "cargo.toml", "go.mod", "pom.xml", "build.gradle", "composer.json",
+                  "gemfile", "makefile", "docker-compose.yml", "dockerfile", "tsconfig.json")
+
+
+def api_setup_save(data):
+    """向导落盘。⛔ 只写 roots.json，不碰任何真源。"""
+    workspaces = [str(p) for p in (data.get("workspaces") or []) if str(p).strip()]
+    workspaces = sorted(set(p for p in workspaces if os.path.isdir(p)))
+    excluded = sorted(set(str(p) for p in (data.get("excluded") or []) if str(p).strip()))
+    projects = [str(p) for p in (data.get("projects") or []) if str(p).strip()]
+    projects = [p for p in projects if os.path.isdir(p)]
+    # 去重兜底：单独加的若已被某个「整个文件夹」罩住，就不必再单列一遍。
+    # 前端也做了这层，但配置是要落盘的东西——前端漏一次就脏一次，这里必须再挡一道。
+    ws_pref = [os.path.normcase(w).rstrip("\\/") + os.sep for w in workspaces]
+    projects = [p for p in projects
+                if not any(os.path.normcase(p).startswith(w) for w in ws_pref)
+                and not any(os.path.normcase(p).rstrip("\\/") + os.sep == w for w in ws_pref)]
+    # 前端不传某个根 → 沿用现有值（多半是首跑自动探测出来的），别把它抹成 null：
+    # 否则在本机跑一遍向导，{NEXUS} 就没了，几十条真源集体变「无根」。
+    cur = {}
+    if os.path.isfile(ACTIVE_ROOTS_FILE):
+        try:
+            with io.open(ACTIVE_ROOTS_FILE, encoding="utf-8") as f:
+                cur = (json.load(f) or {}).get("roots") or {}
+        except (OSError, ValueError):
+            cur = {}
+    incoming = data.get("roots") or {}
+    roots = {}
+    for alias in ("NEXUS", "D", "HOME"):
+        v = incoming.get(alias, cur.get(alias))
+        v = str(v).strip() if v else ""
+        roots[alias] = v if (v and os.path.isdir(v)) else None
+    if not roots.get("HOME"):
+        roots["HOME"] = os.path.expanduser("~")
+    payload = {
+        "machine_id": os.environ.get("COMPUTERNAME") or "unknown",
+        "roots": roots,
+        "workspaces": workspaces,
+        "projects": sorted(set(projects)),
+        "excluded": excluded,
+        "setup_done": True,
+    }
+    try:
+        with _CONF_LOCK:
+            with io.open(ACTIVE_ROOTS_FILE, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        return 500, {"ok": False, "error": "写 roots.json 失败：%s" % e}
+    data2 = build(load_roots(), ACTIVE_SITE)  # 立即重算，用户点完就能看到自己的项目
+    return 200, {"ok": True, "roots": roots, "workspaces": workspaces,
+                 "projects": payload["projects"], "excluded": excluded,
+                 "found": len(data2.get("projects", []))}
+
+
+DRIVE_KIND = {2: "removable", 3: "fixed", 4: "remote", 5: "cdrom", 6: "ramdisk"}
+
+
+def list_drives():
+    """列盘符。⛔ 全程零 IO：用位图 + GetDriveType，不碰 os.path.isdir——
+    对一个断开的网络映射盘，isdir 会卡几十秒，把整个向导僵住。
+    外接硬盘/U 盘/网络盘照样列出来（客户的项目可能就在上面），
+    但默认不勾：移动盘可能是几 T 的备份盘，网络盘慢且随时会断，让用户自己决定。"""
+    out = []
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+    except (ImportError, AttributeError, OSError):
+        # 非 Windows 或拿不到 API：退回老办法，至少别把功能丢了
+        for c in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            p = "%s:\\" % c
+            if os.path.isdir(p):
+                out.append({"path": p, "kind": "fixed", "label": "", "default": True})
+        return out
+    bitmap = k32.GetLogicalDrives()
+    for i in range(26):
+        if not (bitmap & (1 << i)):
+            continue
+        path = "%s:\\" % chr(ord("A") + i)
+        kind = DRIVE_KIND.get(k32.GetDriveTypeW(ctypes.c_wchar_p(path)), "unknown")
+        if kind in ("cdrom", "ramdisk", "unknown"):
+            continue  # 光驱/内存盘上不会有项目
+        label = ""
+        if kind != "remote":  # 网络盘读卷标同样可能卡，跳过
+            buf = ctypes.create_unicode_buffer(261)
+            try:
+                if k32.GetVolumeInformationW(ctypes.c_wchar_p(path), buf, 260,
+                                             None, None, None, None, 0):
+                    label = buf.value or ""
+            except (OSError, ValueError):
+                label = ""
+        out.append({"path": path, "kind": kind, "label": label,
+                    "default": kind == "fixed"})
+    return out
+
+
+# 配置是「读 → 改 → 写」三步，多个请求同时来就会互相覆盖。
+# 实测：3 个并发「移出项目库」只生效 2 个，另一个被后写的盖掉了。
+_CONF_LOCK = threading.RLock()
+
+
+def _clean_path(v):
+    """路径入口统一净化。⛔ 别信任何外部传进来的类型——
+    实测 path 传个数字就 12345.strip() → AttributeError 崩在 handler 里。"""
+    if v is None:
+        return ""
+    try:
+        return str(v).strip().strip('"')
+    except Exception:
+        return ""
+
+
+def _reject_bad_project_path(path):
+    """挡住不该当项目的路径。⛔ 不是替用户做主，是挡明显的误操作：
+    实测把 C:\\Windows\\System32、\\\\?\\C:\\、..\\.. 传进来都会被当成项目收下，
+    列表里冒出 System32、空名字。整盘或系统目录被登记成项目，
+    后果是驾驶舱去扫几十万个文件。"""
+    try:
+        p = os.path.normcase(os.path.abspath(str(path))).rstrip("\\/")
+    except (TypeError, ValueError, OSError):
+        return "路径不合法"
+    if not p or len(p) <= 2 or p.endswith(":"):
+        return "整个盘符不能当项目，请选具体的项目文件夹"
+    for env in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+        sd = os.environ.get(env)
+        if not sd:
+            continue
+        sd = os.path.normcase(os.path.abspath(sd)).rstrip("\\/")
+        if p == sd or p.startswith(sd + os.sep):
+            return "这是系统目录，不能当项目"
+    return None
+
+
+def _load_conf():
+    if os.path.isfile(ACTIVE_ROOTS_FILE):
+        try:
+            with io.open(ACTIVE_ROOTS_FILE, encoding="utf-8") as f:
+                return json.load(f) or {}
+        except (OSError, ValueError):
+            return {}
+    return {}
+
+
+def _save_conf(conf):
+    with io.open(ACTIVE_ROOTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(conf, f, ensure_ascii=False, indent=2)
+
+
+def api_project_add(data):
+    """在项目库里随时加项目（不只首跑）。路径由「添加项目」的系统对话框给出。"""
+    path = _clean_path(data.get("path"))
+    whole = bool(data.get("whole"))
+    if not path:
+        return 400, {"ok": False, "error": "没给路径"}
+    try:
+        path = os.path.abspath(path)
+    except (ValueError, OSError):
+        return 400, {"ok": False, "error": "路径不合法"}
+    if not os.path.isdir(path):
+        return 400, {"ok": False, "error": "这个文件夹不存在：%s" % path}
+    bad = _reject_bad_project_path(path)
+    if bad:
+        return 400, {"ok": False, "error": bad}
+    with _CONF_LOCK:
+        return _project_add_locked(path, whole)
+
+
+def _project_add_locked(path, whole):
+    conf = _load_conf()
+    ws = list(conf.get("workspaces") or [])
+    projects = list(conf.get("projects") or [])
+    excluded = list(conf.get("excluded") or [])
+    low = os.path.normcase(path)
+    # 被移出过又重新添加：先把它从「已移出」里摘掉，否则加了也看不见
+    excluded = [x for x in excluded if os.path.normcase(x) != low]
+    if whole:
+        if any(os.path.normcase(w) == low for w in ws):
+            return 200, {"ok": True, "dup": True, "reason": "这个文件夹已经整个加过了"}
+        ws.append(path)
+        projects = [p for p in projects
+                    if os.path.normcase(p) != low
+                    and not os.path.normcase(p).startswith(low + os.sep)]
+    else:
+        if any(os.path.normcase(p) == low for p in projects):
+            return 200, {"ok": True, "dup": True, "reason": "这个项目已经加过了"}
+        if any(low == os.path.normcase(w) or low.startswith(os.path.normcase(w) + os.sep)
+               for w in ws):
+            # 它已经被某个「整个文件夹」罩着了；之前若被移出过，上面摘 excluded 就够了
+            conf["excluded"] = excluded
+            _save_conf(conf)
+            build(load_roots(), ACTIVE_SITE)
+            return 200, {"ok": True, "dup": True,
+                         "reason": "它所在的文件夹已经整个加过了，现在已恢复显示"}
+        projects.append(path)
+    conf["workspaces"], conf["projects"], conf["excluded"] = ws, sorted(set(projects)), excluded
+    conf["setup_done"] = True
+    _save_conf(conf)
+    d = build(load_roots(), ACTIVE_SITE)
+    return 200, {"ok": True, "dup": False, "path": path,
+                 "projects_now": len(d.get("projects", []))}
+
+
+def api_project_remove(data):
+    """把项目移出项目库。
+
+    ⛔ 这里**只改灵台自己的配置，绝不碰用户的文件**。
+    用户点「移除」时脑子里想的多半是「别在这儿显示了」，但也可能以为是删文件——
+    所以按钮叫「移出项目库」不叫「删除」，返回值里也把「文件一个没动」说清楚。
+    灵台永远不提供删除用户项目文件的功能，这条不给任何开关。
+    """
+    path = _clean_path(data.get("path"))
+    if not path:
+        return 400, {"ok": False, "error": "没给路径"}
+    try:
+        path = os.path.abspath(path)
+    except (ValueError, OSError):
+        return 400, {"ok": False, "error": "路径不合法"}
+    with _CONF_LOCK:
+        return _project_remove_locked(path)
+
+
+def _project_remove_locked(path):
+    conf = _load_conf()
+    ws = list(conf.get("workspaces") or [])
+    projects = list(conf.get("projects") or [])
+    excluded = list(conf.get("excluded") or [])
+    low = os.path.normcase(path)
+
+    was_ws = any(os.path.normcase(w) == low for w in ws)
+    ws = [w for w in ws if os.path.normcase(w) != low]
+    before = len(projects)
+    projects = [p for p in projects if os.path.normcase(p) != low]
+    removed_direct = len(projects) < before
+    # 来自工作区/装配图/sandbox 自动发现的，删不掉「来源」，只能记进排除单
+    if not was_ws and not any(os.path.normcase(x) == low for x in excluded):
+        excluded.append(path)
+    conf["workspaces"], conf["projects"], conf["excluded"] = ws, projects, sorted(set(excluded))
+    conf["setup_done"] = True
+    _save_conf(conf)
+    d = build(load_roots(), ACTIVE_SITE)
+    still = any(os.path.normcase(p["path"]) == low for p in d.get("projects", []))
+    return 200, {"ok": True, "path": path, "files_untouched": os.path.isdir(path),
+                 "how": ("整个文件夹" if was_ws else ("单项" if removed_direct else "记入排除单")),
+                 "still_listed": still, "projects_now": len(d.get("projects", []))}
+
+
+def api_project_restore(data):
+    """撤销移出——把它从排除单里拿回来。移错了要能一键回来。"""
+    path = _clean_path(data.get("path"))
+    if not path:
+        return 400, {"ok": False, "error": "没给路径"}
+    try:
+        path = os.path.abspath(path)
+    except (ValueError, OSError):
+        return 400, {"ok": False, "error": "路径不合法"}
+    with _CONF_LOCK:
+        return _project_restore_locked(path)
+
+
+def _project_restore_locked(path):
+    conf = _load_conf()
+    low = os.path.normcase(path)
+    excluded = [x for x in (conf.get("excluded") or []) if os.path.normcase(x) != low]
+    conf["excluded"] = excluded
+    # 若它不在任何工作区底下，光摘排除单还不够，得把它作为单项加回来
+    ws = list(conf.get("workspaces") or [])
+    covered = any(low == os.path.normcase(w) or low.startswith(os.path.normcase(w) + os.sep)
+                  for w in ws)
+    projects = list(conf.get("projects") or [])
+    if not covered and os.path.isdir(path) \
+            and not any(os.path.normcase(p) == low for p in projects):
+        projects.append(path)
+    conf["projects"] = sorted(set(projects))
+    _save_conf(conf)
+    d = build(load_roots(), ACTIVE_SITE)
+    back = any(os.path.normcase(p["path"]) == low for p in d.get("projects", []))
+    return 200, {"ok": True, "path": path, "restored": back,
+                 "projects_now": len(d.get("projects", []))}
+
+
+def api_setup_state(_data):
+    cur = {}
+    if os.path.isfile(ACTIVE_ROOTS_FILE):
+        try:
+            with io.open(ACTIVE_ROOTS_FILE, encoding="utf-8") as f:
+                cur = json.load(f) or {}
+        except (OSError, ValueError):
+            cur = {}
+    return 200, {"ok": True, "drives": list_drives(), "home": os.path.expanduser("~"),
+                 "default_depth": 3,
+                 "workspaces": cur.get("workspaces") or [],
+                 "projects": cur.get("projects") or [],
+                 "excluded": cur.get("excluded") or []}
+
+
+def _dir_evidence(p):
+    """一个目录的「像不像项目」证据。不下判断，只摆事实。"""
+    try:
+        names = os.listdir(p)
+    except OSError:
+        return {"md": 0, "subs": 0, "installed": False, "signals": [], "readable": False}
+    low = set(n.lower() for n in names)
+    md = subs = 0
+    for n in names:
+        try:
+            if os.path.isdir(os.path.join(p, n)):
+                subs += 1
+            elif n.lower().endswith(".md"):
+                md += 1
+        except OSError:
+            continue
+    installed = False
+    if "brain" in low:
+        try:
+            installed = any(h in set(os.listdir(os.path.join(p, "brain"))) for h in ORGAN_HINT)
+        except OSError:
+            installed = False
+    sig = []
+    if installed:
+        sig.append("已装六器官")
+    if ".git" in low:
+        sig.append("git")
+    if "claude.md" in low or ".claude" in low:
+        sig.append("接过 AI")
+    if any(f in low for f in ENGINEER_FILES):
+        sig.append("工程件")
+    return {"md": md, "subs": subs, "installed": installed, "signals": sig, "readable": True}
+
+
+_PICK_LOCK = threading.Lock()
+
+
+def native_pick_folder(title="选择项目所在的文件夹"):
+    """弹 Windows 原生「浏览文件夹」对话框，返回用户选的路径（取消返回 None）。
+
+    ⛔ 三个坑，都是实测踩出来的：
+      ① 64 位下必须声明 restype/argtypes——SHBrowseForFolderW 返回 LPITEMIDLIST 指针，
+         ctypes 默认按 c_int 截断，传给 SHGetPathFromIDListW 直接 access violation。
+      ② 必须在 BFFM_INITIALIZED 回调里 SetForegroundWindow，否则对话框会开在
+         浏览器窗口后面，用户看不见还以为程序死了。
+      ③ 每个线程都要 CoInitialize（HTTP handler 是线程池里的线程）。
+    """
+    if os.name != "nt":
+        return None, "只有 Windows 有这个对话框"
+    import ctypes
+    import ctypes.wintypes as wt
+
+    ole32 = ctypes.windll.ole32
+    shell32 = ctypes.windll.shell32
+    user32 = ctypes.windll.user32
+    BIF_RETURNONLYFSDIRS, BIF_NEWDIALOGSTYLE, BFFM_INITIALIZED = 0x1, 0x40, 1
+
+    class BROWSEINFO(ctypes.Structure):
+        _fields_ = [("hwndOwner", wt.HWND), ("pidlRoot", ctypes.c_void_p),
+                    ("pszDisplayName", wt.LPWSTR), ("lpszTitle", wt.LPCWSTR),
+                    ("ulFlags", ctypes.c_uint), ("lpfn", ctypes.c_void_p),
+                    ("lParam", wt.LPARAM), ("iImage", ctypes.c_int)]
+
+    shell32.SHBrowseForFolderW.restype = ctypes.c_void_p
+    shell32.SHBrowseForFolderW.argtypes = [ctypes.POINTER(BROWSEINFO)]
+    shell32.SHGetPathFromIDListW.restype = wt.BOOL
+    shell32.SHGetPathFromIDListW.argtypes = [ctypes.c_void_p, wt.LPWSTR]
+    ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+
+    cbtype = ctypes.WINFUNCTYPE(ctypes.c_int, wt.HWND, ctypes.c_uint, wt.LPARAM, wt.LPARAM)
+
+    def _cb(hwnd, msg, lp, data):
+        if msg == BFFM_INITIALIZED:
+            user32.SetForegroundWindow(hwnd)
+            user32.SetWindowPos(hwnd, wt.HWND(-1), 0, 0, 0, 0, 0x0003)
+            user32.SetWindowPos(hwnd, wt.HWND(-2), 0, 0, 0, 0, 0x0003)
+        return 0
+
+    cb = cbtype(_cb)
+    ole32.CoInitialize(None)
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        bi = BROWSEINFO()
+        bi.hwndOwner = None
+        bi.pidlRoot = None
+        bi.pszDisplayName = ctypes.cast(buf, wt.LPWSTR)
+        bi.lpszTitle = title
+        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
+        bi.lpfn = ctypes.cast(cb, ctypes.c_void_p)
+        pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
+        if not pidl:
+            return None, None          # 用户点了取消
+        path = ctypes.create_unicode_buffer(260)
+        ok = shell32.SHGetPathFromIDListW(pidl, path)
+        ole32.CoTaskMemFree(pidl)
+        if not ok or not path.value:
+            return None, "选中的不是一个文件夹路径（比如「此电脑」本身）"
+        return path.value, None
+    except Exception as e:                       # 兜底出声，不静默返回空
+        return None, "对话框出错：%r" % (e,)
+    finally:
+        try:
+            ole32.CoUninitialize()
+        except Exception:
+            pass
+
+
+def api_pick_folder(data):
+    """点「添加项目」→ 这里弹真正的系统对话框。请求会一直等到用户选完或取消。"""
+    if not _PICK_LOCK.acquire(blocking=False):
+        return 409, {"ok": False, "error": "已经有一个选择窗口开着了，先把它处理掉"}
+    try:
+        path, err = native_pick_folder(data.get("title") or "选择项目所在的文件夹")
+    finally:
+        _PICK_LOCK.release()
+    if err:
+        return 500, {"ok": False, "error": err}
+    if not path:
+        return 200, {"ok": True, "cancelled": True}
+    ev = _dir_evidence(path)
+    child = 0
+    try:
+        for e in os.scandir(path):
+            if e.is_dir() and not e.name.startswith(".") and e.name.lower() not in SCAN_SKIP:
+                c = _dir_evidence(e.path)
+                if c["installed"] or c["md"] or c["subs"]:
+                    child += 1
+    except OSError:
+        child = 0
+    return 200, {"ok": True, "cancelled": False, "path": path,
+                 "name": os.path.basename(path) or path,
+                 "installed": ev["installed"], "signals": ev["signals"],
+                 "md": ev["md"], "subs": ev["subs"], "child_candidates": child}
+
+
+def _looks_like_project(names_low):
+    return ("brain" in names_low or ".git" in names_low
+            or any(e in names_low for e in ENGINEER_FILES))
+
+
+def find_workspaces(locations, depth=3):
+    """帮「忘了项目放哪」的人找**工作区**——不是找项目。
+
+    ⛔ 判「这个目录是不是项目」不可靠（实测 36% 召回、11 误报，已弃掉）；
+    但判「这个目录是不是装项目的柜子」是结构性的，可靠得多：柜子底下一层
+    齐刷刷全是有内容的子目录。四条约束把候选从 191 压到 9，sandbox 排第一：
+      ① 盘根不算——D:\\ 底下 44 个子目录，但它不是谁的工作区
+      ② 柜子自己不是项目——Savant-Learn 有 brain+git，那是项目
+      ③ 至少一个子目录带强信号——否则是 static\\video 那种 83 个 audio_xxx 的资源堆
+      ④ 系统目录不进、软件安装目录靠边站
+    """
+    t0 = time.time()
+    out, solo, seen = [], [], 0
+    for base in locations:
+        if not base or not os.path.isdir(base):
+            continue
+        stack = [(base, 0)]
+        while stack and seen < 30000:
+            d, dep = stack.pop()
+            if dep > depth:
+                continue
+            try:
+                entries = list(os.scandir(d))
+            except OSError:
+                continue
+            seen += 1
+            for e in entries:
+                try:
+                    if e.is_dir() and e.name.lower() not in SCAN_SKIP and not e.name.startswith("."):
+                        stack.append((e.path, dep + 1))
+                except OSError:
+                    continue
+            if dep == 0:
+                continue
+            try:
+                names_low = set(x.lower() for x in os.listdir(d))
+                subs = [e for e in os.scandir(d) if e.is_dir()
+                        and not e.name.startswith(".") and e.name.lower() not in SCAN_SKIP]
+            except OSError:
+                continue
+            # 散落在外的独立项目也要收——Savant-Learn 有 brain+git，是最确定的那种项目，
+            # 上一版因「柜子自己不是项目」被排掉、又不在任何柜子里，从结果里彻底消失。
+            # ⛔ 但「有 CLAUDE.md/.claude」不能算「自己是项目」：柜子也会有那份目录说明，
+            #    照它判会把 sandbox 判成项目，底下 13 个真项目一起陪葬（实测过，别再犯）。
+            inst = False
+            if "brain" in names_low:
+                try:
+                    inst = any(o in set(os.listdir(os.path.join(d, "brain")))
+                               for o in ORGAN_HINT)
+                except OSError:
+                    inst = False
+            if inst or _looks_like_project(names_low):
+                sig = []
+                if inst:
+                    sig.append("已装六器官")
+                if ".git" in names_low:
+                    sig.append("git")
+                if "claude.md" in names_low or ".claude" in names_low:
+                    sig.append("接过 AI")
+                if any(x in names_low for x in ENGINEER_FILES):
+                    sig.append("工程件")
+                segs0 = [x.lower() for x in d.replace("/", "\\").split("\\")]
+                solo.append({"path": d, "name": os.path.basename(d) or d,
+                             "installed": inst, "signals": sig,
+                             "software": any(x in SOFTWARE_SEG for x in segs0)})
+                # 已装六器官 = 确定是项目，不必再问它是不是柜子；
+                # 只有 .git/工程件的则两档并存，让人自己选当项目还是当工作区。
+                if inst:
+                    continue
+                self_project = True
+            else:
+                self_project = False
+            n = installed = git = ai = eng = 0
+            names = []
+            for s in subs:
+                try:
+                    inner = set(x.lower() for x in os.listdir(s.path))
+                except OSError:
+                    continue
+                if not (any(x.endswith(".md") for x in inner) or len(inner) > 2):
+                    continue
+                n += 1
+                if len(names) < 4:
+                    names.append(s.name)
+                if "brain" in inner:
+                    try:
+                        if any(o in set(os.listdir(os.path.join(s.path, "brain")))
+                               for o in ORGAN_HINT):
+                            installed += 1
+                    except OSError:
+                        pass
+                if ".git" in inner:
+                    git += 1
+                if "claude.md" in inner or ".claude" in inner:
+                    ai += 1
+                if any(x in inner for x in ENGINEER_FILES):
+                    eng += 1
+            if n < 2 or (installed + git + ai + eng) == 0:
+                continue
+            segs = [x.lower() for x in d.replace("/", "\\").split("\\")]
+            out.append({"path": d, "children": n, "installed": installed, "git": git,
+                        "ai": ai, "eng": eng, "sample": names,
+                        "self_project": self_project,
+                        "software": any(x in SOFTWARE_SEG for x in segs)})
+    # 排序：软件目录垫底；「自己也像项目」的（ruflow、ComfyUI 这种）往后排——
+    # 它们更可能是项目本身而不是装项目的柜子；纯柜子（sandbox）该排最前。
+    out.sort(key=lambda x: (x["software"], x["self_project"], -x["installed"],
+                            -(x["git"] + x["ai"] + x["eng"]), -x["children"]))
+    # 已经被某个候选工作区罩住的独立项目，不用再单列一遍
+    ws_low = [os.path.normcase(w["path"]) + os.sep for w in out]
+    solo = [s for s in solo
+            if not any(os.path.normcase(s["path"]).startswith(w) for w in ws_low)]
+    solo.sort(key=lambda x: (x["software"], not x["installed"], -len(x["signals"]), x["path"]))
+    return {"workspaces": out, "projects": solo, "scanned": seen,
+            "ms": int((time.time() - t0) * 1000)}
+
+
+def api_find_projects(data):
+    """扫一遍，直接给出**项目候选清单**——不让人先去理解「工作区」是什么。
+
+    内部还是先找柜子再展开（柜子判据可靠、项目判据不可靠），但那是实现细节，
+    界面上只呈现「这些可能是你的项目，按所在文件夹分好组，勾就行」。
+    """
+    locs = [str(x) for x in (data.get("locations") or []) if str(x).strip()]
+    if not locs:
+        locs = [d["path"] for d in list_drives() if d["default"]]
+    bad = [p for p in locs if not os.path.isdir(p)]
+    if bad:
+        return 400, {"ok": False, "error": "这些位置不存在：%s" % "、".join(bad[:3])}
+    try:
+        depth = max(1, min(int(data.get("depth", 3)), 5))
+    except (TypeError, ValueError):
+        depth = 3
+    r = find_workspaces(locs, depth)
+
+    groups, seen = [], set()
+
+    def ev_of(p):
+        e = _dir_evidence(p)
+        return {"path": p, "name": os.path.basename(p) or p,
+                "installed": e["installed"], "signals": e["signals"],
+                "md": e["md"], "subs": e["subs"]}
+
+    for w in r["workspaces"]:
+        # ⛔ 「自己也像项目」的不展开：ComfyUI/ruflow/nexus_ai 有 .git 或工程件，
+        # 展开它们等于把项目的内部结构（api_server、docker、migrations…）当项目列出来，
+        # 清单一下子从 40 涨到 160。它们本身已经在「单独放在外面」那档里了。
+        if w.get("self_project"):
+            continue
+        items = []
+        try:
+            for e in sorted(os.scandir(w["path"]), key=lambda x: x.name):
+                if not e.is_dir() or e.name.startswith(".") or e.name.lower() in SCAN_SKIP:
+                    continue
+                key = os.path.normcase(e.path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(ev_of(e.path))
+        except OSError:
+            continue
+        if items:
+            items.sort(key=lambda x: (not x["installed"], -len(x["signals"]), x["name"]))
+            groups.append({"parent": w["path"], "kind": "folder", "count": len(items),
+                           "installed_n": sum(1 for i in items if i["installed"]),
+                           "software": w["software"], "items": items})
+    solo = []
+    for s in r.get("projects", []):
+        key = os.path.normcase(s["path"])
+        if key in seen:
+            continue
+        seen.add(key)
+        solo.append(ev_of(s["path"]))
+    if solo:
+        solo.sort(key=lambda x: (not x["installed"], -len(x["signals"]), x["name"]))
+        groups.append({"parent": "", "kind": "solo", "count": len(solo),
+                       "installed_n": sum(1 for i in solo if i["installed"]),
+                       "software": False, "items": solo})
+    groups.sort(key=lambda g: (g["software"], g["kind"] == "solo",
+                               -g["installed_n"], -g["count"]))
+    total = sum(g["count"] for g in groups)
+    return 200, {"ok": True, "groups": groups, "total": total,
+                 "scanned": r["scanned"], "ms": r["ms"]}
+
+
+def api_browse(data):
+    """目录浏览器。⛔ 浏览器拿不到系统文件夹对话框（webkitdirectory 只给相对路径），
+    所以自己做一个——而且顺手把「这个目录下有几个像项目的子目录」算出来，
+    选工作区时一眼就能认：项目容器底下一层通常齐刷刷全是候选。"""
+    path = (data.get("path") or "").strip()
+    if not path:  # 根层：列盘符
+        return 200, {"ok": True, "path": "", "parent": None, "crumbs": [],
+                     "dirs": [{"name": d["path"], "path": d["path"], "kind": d["kind"],
+                               "label": d["label"], "md": 0, "subs": 0,
+                               "installed": False, "signals": [], "candidates": None}
+                              for d in list_drives()]}
+    path = os.path.abspath(path)
+    if not os.path.isdir(path):
+        return 400, {"ok": False, "error": "目录不存在：%s" % path}
+    try:
+        entries = sorted(e for e in os.listdir(path)
+                         if not e.startswith(".") and e.lower() not in SCAN_SKIP)
+    except OSError as e:
+        return 400, {"ok": False, "error": "读不了这个目录：%s" % e}
+    dirs, files, cand = [], [], 0
+    for name in entries:
+        p = os.path.join(path, name)
+        if os.path.isdir(p):
+            ev = _dir_evidence(p)
+            if ev["installed"] or ev["md"] or ev["subs"]:
+                cand += 1
+            dirs.append({"name": name, "path": p, "kind": "dir", "label": "",
+                         "md": ev["md"], "subs": ev["subs"],
+                         "installed": ev["installed"], "signals": ev["signals"],
+                         "candidates": None})
+        elif os.path.isfile(p):
+            # 也列文件——像资源管理器那样能看清里面有什么，才判断得出这是不是项目
+            try:
+                sz = os.path.getsize(p)
+            except OSError:
+                sz = 0
+            files.append({"name": name, "size": sz})
+    crumbs, cur = [], path
+    while True:
+        crumbs.insert(0, {"name": os.path.basename(cur) or cur, "path": cur})
+        nxt = os.path.dirname(cur)
+        if not nxt or nxt == cur:
+            break
+        cur = nxt
+    self_ev = _dir_evidence(path)
+    return 200, {"ok": True, "path": path, "parent": os.path.dirname(path) or None,
+                 "crumbs": crumbs, "dirs": dirs, "files": files[:60],
+                 "file_total": len(files),
+                 "child_candidates": cand, "self": self_ev}
+
+
 def _run_generator(brain_dir):
     """用 skills 真源直跑任意项目（v0.7 共享化：--dir，项目副本只是快照）。"""
     gen = os.path.join(REPO, "project-delivery", "scaffold", "状态生成器.py")
     if not os.path.isfile(gen):
         return {"error": "生成器真源不在：%s" % gen}
+
+    if _FROZEN:
+        # ⛔ 打包后 sys.executable 是 lingtaios.exe 自己，不是 python.exe——
+        # 拿它当解释器去跑生成器，参数不认、输出编码也对不上（0xc9/GBK 撞 utf-8 解码）。
+        # 而「零依赖」意味着不能改成去找系统 Python：用户机器上可能根本没有。
+        # → 进程内执行。生成器无 chdir 副作用，只需借走 argv 和 stdout。
+        import contextlib
+        import runpy
+        buf = io.StringIO()
+        argv_bak = sys.argv[:]
+        sys.argv = [gen, "--dir", brain_dir]
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                runpy.run_path(gen, run_name="__main__")
+            code = 0
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        except Exception as e:  # 生成器炸了要出声，不许静默返空
+            return {"exit": 1, "out": buf.getvalue()[-2000:], "err": repr(e)[:500]}
+        finally:
+            sys.argv = argv_bak
+        return {"exit": code, "out": buf.getvalue()[-2000:], "err": ""}
+
     try:
+        # errors="replace"：子进程若按 GBK 吐中文，不许把解码异常炸到调用方
         r = subprocess.run([sys.executable, "-X", "utf8", gen, "--dir", brain_dir],
-                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"error": str(e)}
     return {"exit": r.returncode, "out": (r.stdout or "")[-2000:], "err": (r.stderr or "")[-500:]}
@@ -492,7 +1232,7 @@ def sync_probe(projects):
 def api_refresh(data):
     """深查：重算全部真源（快照 vs 深查，抄 OpenClaw 状态分档）。"""
     try:
-        d = build(load_roots(), SITE)
+        d = build(load_roots(), ACTIVE_SITE)
         return 200, d
     except Exception as e:
         return 500, {"ok": False, "error": str(e)}
@@ -513,7 +1253,7 @@ def api_sync_project(data):
             shutil.copyfile(src, dst)
             n += 1
     try:
-        build(load_roots(), SITE)
+        build(load_roots(), ACTIVE_SITE)
     except Exception:
         pass
     return 200, {"ok": True, "synced": n}
@@ -731,6 +1471,13 @@ def parse_map(text, roots):
         if m:
             cur_layer = m.group(1)
     # 表格按小节归属：重扫，跟踪最近的 ### L 行
+    # 段标题里的「本机专属」整层生效（L5 业务脑 / L6 项目层 / L7 归档层）；
+    # 个别行另用性质列的 ·本机专属 单标（如 {HOME}/.claude/CLAUDE.md）。
+    layer_local_only = {}
+    for ln in lines:
+        m = re.match(r"^###\s+(L\d)(.*)$", ln)
+        if m:
+            layer_local_only[m.group(1)] = "本机专属" in m.group(2)
     i, n = 0, len(lines)
     rows_by_layer = {}
     while i < n:
@@ -769,14 +1516,31 @@ def parse_map(text, roots):
                     if not (raw.startswith("{") or ":" in raw or "/" in raw or "\\" in raw):
                         # 裸名继承同格上一个文件的别名目录（如 `A.md`、`B.md`）
                         raw = (alias_dir or "{%s}/" % layer2alias(layer)) + raw
+                    nature = d.get("性质", "")
+                    # 「仅源码态」：灵台自身的源码/本机配置。exe 形态下用户手里只有 exe，
+                    # 这些路径本就不存在——登记它们只有两种结局：一堆假 missing，
+                    # 或者像 v0.1.1 那样把源码塞进包换假 ok（508MB 体积 + 量具照自己）。
+                    # 所以 frozen 时直接不登记：分母只算「这个形态下真该在位的东西」。
+                    if _FROZEN and "仅源码态" in nature:
+                        continue
                     resolved = resolve(raw, roots)
+                    if resolved is None:
+                        status = "noroot"
+                    else:
+                        status = _status(resolved)
+                        # 「本机专属」件（业务脑/项目/归档/用户自己的 AI 配置）不随灵台分发，
+                        # 别人的机器上本来就没有 → 不在时标 absent（本机无此件），不算断头。
+                        # ⛔ 只豁免「不在」；文件在就照常判——自己的机器一条都不放过。
+                        if status == "missing" and (
+                                layer_local_only.get(layer) or "本机专属" in nature):
+                            status = "absent"
                     sources.append({
                         "layer": layer,
                         "path": raw,
                         "resolved": resolved or "",
-                        "nature": d.get("性质", ""),
+                        "nature": nature,
                         "note": d.get("备注", ""),
-                        "status": "noroot" if resolved is None else _status(resolved),
+                        "status": status,
                     })
                     if os.path.splitext(raw)[1]:
                         m = re.match(r"^(\{[A-Z]+\}/.*)/[^/]+$", raw)
@@ -802,6 +1566,7 @@ def _status(path):
 def health_check(sources):
     missing = [s for s in sources if s["status"] == "missing" and s["resolved"]]
     noroot = [s for s in sources if s["status"] == "noroot"]
+    absent = [s for s in sources if s["status"] == "absent"]
     ok = [s for s in sources if s["status"] == "ok"]
 
     # 同名双份 diff 扫描（登记路径去重后，同一 basename 的**不同文件**两两比对是否字节相同）
@@ -823,8 +1588,13 @@ def health_check(sources):
                     identical.append({"a": paths[i], "b": paths[j]})
     return {
         "total": len(sources), "ok": len(ok),
+        # 状态环的分母：这台机器**该有**的 = 登记总数 − 无根 − 本机无此件。
+        # 用 total 当分母会把「别人机器上本来就没有的东西」算成缺件：
+        # 陌生人首开曾显示 10/59，其中 34 无根 15 本机件，真正该有的其实全在位。
+        "applicable": len(sources) - len(noroot) - len(absent),
         "missing": [{"layer": s["layer"], "path": s["path"], "resolved": s["resolved"]} for s in missing],
         "noroot": len(noroot), "noroot_paths": [s["path"] for s in noroot],
+        "absent": len(absent), "absent_paths": [s["path"] for s in absent],
         "identical_pairs": identical,
     }
 
@@ -843,7 +1613,10 @@ def discover_projects(roots, sources):
         except OSError:
             return False
 
-    def scan(base):
+    def scan(base, require_md=True):
+        """require_md=False 用于「用户指认的工作区」：底下一层全收。
+        要求含 md 会漏掉真项目——sandbox 里的 nexus（12 子目录+git+工程件）
+        就因为根目录没有 .md 一直没被收进来。不该由文件类型替用户决定。"""
         if not base or not os.path.isdir(base):
             return
         try:
@@ -854,7 +1627,7 @@ def discover_projects(roots, sources):
             if e.startswith(".") or e in EXCLUDE:
                 continue
             p = os.path.join(base, e)
-            if os.path.isdir(p) and has_md(p):
+            if os.path.isdir(p) and (not require_md or has_md(p)):
                 found[os.path.normpath(p).lower()] = p
 
     scan(os.path.join(roots.get("NEXUS"), "sandbox") if roots.get("NEXUS") else None)
@@ -864,7 +1637,32 @@ def discover_projects(roots, sources):
             p = (s["resolved"] or "").rstrip("\\/")
             if os.path.isdir(p):
                 found[os.path.normpath(p).lower()] = p
-    found[os.path.normpath(HERE).lower()] = HERE  # 驾驶舱自己
+    # 工作区：用户指认「我的项目放这儿」，底下一层全是项目。
+    # ⛔ 不猜——实测任何基于文件特征的判据都又漏又误：本机 105 个 md 的真项目
+    # 一个工程信号都没有，而有全套工程信号的 ruflow\v2、nexus_ai_backup 又不是独立项目。
+    # VS Code / JetBrains 同样不猜，都要用户显式指定目录。
+    # 路径不可达的（外接盘拔了/网络盘断了/目录挪了）必须出声，不许静默吞掉。
+    unreachable = []
+    for ws in roots.get("_workspaces", []):
+        if os.path.isdir(ws):
+            scan(ws, require_md=False)
+        else:
+            unreachable.append(ws)
+    for p in roots.get("_projects", []):
+        if os.path.isdir(p):
+            found[os.path.normpath(p).lower()] = p
+        else:
+            unreachable.append(p)
+    discover_projects.unreachable = unreachable
+    # 驾驶舱自己：**装了六器官才算项目**。
+    # ⛔ 源码态 HERE 是 brain-console（真有 brain/，第一个吃自己狗粮的项目）；
+    #    exe 形态下 HERE 是 exe 所在目录——放 dist\ 就冒出个叫「dist」的项目，
+    #    放桌面就冒出「Desktop」。实测过：项目库里真多了一条 dist。
+    if os.path.isdir(os.path.join(HERE, "brain")):
+        found[os.path.normpath(HERE).lower()] = HERE
+    # 排除单放最后：否则「驾驶舱自己」这条移出去了又会被重新塞回来
+    for x in roots.get("_excluded", []):      # 工作区里但你说不算项目的
+        found.pop(os.path.normpath(x).lower(), None)
 
     projects = []
     for p in found.values():
@@ -935,6 +1733,12 @@ def build(roots, out_dir):
     data = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "machine_id": roots.get("machine_id", ""),
+        "first_run": not roots.get("_setup_done", True),
+        # 向导勾过、现在够不着的项目（外接盘拔了/网络盘断了/目录挪了）——要显示，不许静默
+        "unreachable_projects": list(getattr(discover_projects, "unreachable", [])),
+        # 被移出项目库的（文件都还在）。要列出来，否则「移错了怎么找回」无解
+        "excluded_projects": [{"path": p, "exists": os.path.isdir(p)}
+                              for p in roots.get("_excluded", [])],
         "root_status": root_status,
         "map_html": mdlite.render(map_text),
         "layers": layers,
@@ -956,6 +1760,9 @@ def build(roots, out_dir):
 
 def serve(open_browser):
     import http.server
+    import socket
+    import urllib.error
+    import urllib.request
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
@@ -976,7 +1783,7 @@ def serve(open_browser):
 
         def do_GET(self):
             if self.path == "/data.json":
-                p = os.path.join(SITE, "data.json")
+                p = os.path.join(ACTIVE_SITE, "data.json")
                 with io.open(p, "rb") as f:
                     body = f.read()
                 self.send_response(200)
@@ -1005,6 +1812,14 @@ def serve(open_browser):
                 "/api/audit_delete": lambda: api_audit_delete(data),
                 "/api/sync_project": lambda: api_sync_project(data),
                 "/api/refresh": lambda: api_refresh(data),
+                "/api/project_add": lambda: api_project_add(data),
+                "/api/project_remove": lambda: api_project_remove(data),
+                "/api/project_restore": lambda: api_project_restore(data),
+                "/api/setup_state": lambda: api_setup_state(data),
+                "/api/browse": lambda: api_browse(data),
+                "/api/pick_folder": lambda: api_pick_folder(data),
+                "/api/find_projects": lambda: api_find_projects(data),
+                "/api/setup_save": lambda: api_setup_save(data),
             }
             fn = routes.get(self.path)
             if fn:
@@ -1016,14 +1831,46 @@ def serve(open_browser):
         def log_message(self, *a):
             pass
 
-    for port in range(8765, 8771):
+    class ExclusiveHTTPServer(http.server.ThreadingHTTPServer):
+        """独占绑定。
+
+        HTTPServer 默认 allow_reuse_address=1。这在 Linux 只放行 TIME_WAIT，
+        在 Windows 却允许直接抢占一个正在 LISTEN 的端口——于是下面的端口探测
+        永远 break 在第一个端口、OSError 永不触发，每起一个新实例都会静默
+        夺走老实例的端口，老页面的 fetch 落到哪个进程全看运气。
+        SO_EXCLUSIVEADDRUSE 把这条路堵死：既不抢别人的，也不许别人抢自己的。
+        """
+        allow_reuse_address = False
+
+        def server_bind(self):
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
+    def lingtai_already_on(port):
+        """这个端口上跑着的是不是一个灵台实例（不是就让开，去下一个端口）"""
         try:
-            srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            with urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=0.6) as r:
+                return b"LingTai" in r.read(4096)
+        except (urllib.error.URLError, OSError):
+            return False
+
+    srv = None
+    for port in range(8765, 8771):
+        # 已经有一个灵台在跑 → 把浏览器指过去，不再起第二个进程
+        if lingtai_already_on(port):
+            url = "http://127.0.0.1:%d/" % port
+            print("灵台 LingTai OS 已在运行：%s  （不重复启动）" % url)
+            if open_browser:
+                webbrowser.open(url)
+            return
+        try:
+            srv = ExclusiveHTTPServer(("127.0.0.1", port), Handler)
             break
         except OSError:
             srv = None
     if srv is None:
-        print("[XX] 8765-8770 端口全被占")
+        print("[XX] 8765-8770 端口全被别的程序占了")
         sys.exit(1)
     url = "http://127.0.0.1:%d/" % port
     print("灵台 LingTai OS 已起：%s  （Ctrl+C 停）" % url)
@@ -1062,10 +1909,20 @@ def main():
                 "HOME": home,
             }
             machine_id = os.environ.get("COMPUTERNAME") or "unknown"
+            # setup_done=false → 前端进首跑向导，让用户确认/改扫描位置、挑自己的项目。
+            # 仍然先写一份自动探测结果：服务照常起得来，向导只是「确认并调整」，
+            # 不是「从零配置」——启动路径一行没动，零风险。
+            # 老的 roots.json 没有这个字段，load_roots 缺省当 true，不打扰现有用户。
             with io.open(ROOTS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"machine_id": machine_id, "roots": roots}, f, ensure_ascii=False, indent=2)
+                json.dump({"machine_id": machine_id, "roots": roots, "setup_done": False},
+                          f, ensure_ascii=False, indent=2)
 
-    roots = load_roots(args.roots_file)
+    if args.roots_file:
+        global ACTIVE_ROOTS_FILE, ACTIVE_SITE
+        ACTIVE_ROOTS_FILE = os.path.abspath(args.roots_file)
+        # 演练的产物也落在演练目录里，别写回真 site/
+        ACTIVE_SITE = os.path.join(os.path.dirname(ACTIVE_ROOTS_FILE), "site")
+    roots = load_roots()
 
     if args.selftest:
         print("dashboard · 破坏性自检")
@@ -1075,9 +1932,15 @@ def main():
         data = build(roots, None)
         ok = True
 
-        def ck(c, m):
+        def ck(c, m, detail=""):
+            # 失败必须说出为什么。只打一个 ✗ 的自检 = 兜底不出声：
+            # exe 里「生成器跑不起来」曾只显示 ✗，真因（ModuleNotFoundError: glob）
+            # 要另外起服务打 API 才挖得出来。
             nonlocal ok
-            print(("  ok " if c else "  ✗ ") + m)
+            line = ("  ok " if c else "  ✗ ") + m
+            if not c and detail:
+                line += "  ← " + str(detail).strip().replace("\n", " ")[:300]
+            print(line)
             ok = ok and c
 
         ck(len(data["layers"]) >= 7, "七层表解析 ≥7 行（实 %d）" % len(data["layers"]))
@@ -1101,7 +1964,8 @@ def main():
             brain = _install_organs_files(tmp, "tmp-proj", retro=True)
             gen = _run_generator(brain)
             ck(gen.get("exit") == 0 and os.path.isfile(os.path.join(brain, "02_状态.json")),
-               "一键装系统装出六器官+状态")
+               "一键装系统装出六器官+状态",
+               gen.get("error") or gen.get("err") or gen.get("out", "")[-200:])
             try:
                 _install_organs_files(tmp, "tmp-proj")
                 ck(False, "重复装系统被拒")
@@ -1117,7 +1981,8 @@ def main():
                     {"name": "n", "type": "file_count", "glob": "*"}]}, f)
             g = _run_generator(tmp2)
             ck(g.get("exit") == 0 and os.path.isfile(os.path.join(tmp2, "02_状态.json")),
-               "生成器 --dir 从 skills 真源直跑（v0.7 共享化）")
+               "生成器 --dir 从 skills 真源直跑（v0.7 共享化）",
+               g.get("error") or g.get("err") or g.get("out", "")[-200:])
         finally:
             shutil.rmtree(tmp2, ignore_errors=True)
         # 进坑向导：缺失效判据 400；录一条→删一条（真源往返，终态不变）
@@ -1131,7 +1996,7 @@ def main():
             ck(st2 == 200 and d2.get("removed") == 1, "审计删除真源行消失")
         sys.exit(0 if ok else 1)
 
-    data = build(roots, SITE)
+    data = build(roots, ACTIVE_SITE)
     h = data["health"]
     print("生成于 %s · 登记 %d 源（ok %d / missing %d / 无根 %d）· 项目 %d · 坑库 %d 条"
           % (data["generated_at"], h["total"], h["ok"], len(h["missing"]), h["noroot"],

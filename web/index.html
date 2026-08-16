@@ -12,10 +12,31 @@
 </head>
 <body>
 <aside class="nav">
-  <div class="brand"><svg class="logo" viewBox="0 0 24 24"><defs><linearGradient id="lg" x1="0" y1="1" x2="1" y2="0"><stop offset="0" style="stop-color: var(--accent)"/><stop offset="1" style="stop-color: var(--accent2)"/></linearGradient></defs><path d="M3 19 L8 10 L11 14.5 L14 9 L21 19 Z" fill="url(#lg)"/></svg>灵台 · LingTai OS <span class="ver">v0.1.0</span></div>
+  <!-- Logo：观星台。「灵台」本义就是周代的天文台——三级渐宽的台基托一颗星。
+       小尺寸下只剩「三条横线＋一个圆」，轮廓仍认得出。
+       渐变走 --logo-a/--logo-b：两个主题各一套，墨色下要亮、宣纸下要压得住。 -->
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+      <defs>
+        <linearGradient id="lg" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" style="stop-color: var(--logo-a)"/>
+          <stop offset="1" style="stop-color: var(--logo-b)"/>
+        </linearGradient>
+      </defs>
+      <circle cx="12" cy="4.6" r="2.6" fill="url(#lg)"/>
+      <rect x="8.4" y="10.4" width="7.2"  height="2.2" rx="1.1" fill="url(#lg)"/>
+      <rect x="5.8" y="14.6" width="12.4" height="2.2" rx="1.1" fill="url(#lg)" opacity=".8"/>
+      <rect x="3.2" y="18.8" width="17.6" height="2.2" rx="1.1" fill="url(#lg)" opacity=".6"/>
+    </svg>
+    <span class="brand-text">灵台AI操作系统<span class="brand-en">LingTai OS<i class="ver">v0.1.1</i></span></span>
+  </div>
   <button class="nav-btn" data-page="home">首页</button>
-  <button class="nav-btn" data-page="projects">项目</button>
+  <button class="nav-btn" data-page="projects">项目库</button>
   <button class="nav-btn" id="theme-toggle">🌙 墨色</button>
+  <div class="nav-dev">
+    <span class="dev-label">开发者 VX</span>
+    <span class="dev-row"><b id="dev-wx">nexusaistart</b><button type="button" class="dev-copy" id="dev-copy">复制</button></span>
+  </div>
   <div class="nav-foot" id="nav-foot">加载中…</div>
 </aside>
 <main id="main"></main>

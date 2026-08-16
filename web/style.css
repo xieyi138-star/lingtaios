@@ -1,5 +1,14 @@
 /* 灵台 LingTai OS · 设计系统 v3（宣纸/墨 双主题 · 朱砂石青 · 零外部依赖） */
 :root, :root[data-theme="light"] {
+  /* 布局量（与主题无关，dark 块不覆盖它）：main 的上内边距。
+     sticky 表头必须减掉它——sticky 的约束矩形是滚动容器的 content box，
+     top:0 会让表头停在 padding 下沿，上方那条 padding 是可见的，
+     滚动的行会从缝里穿过去，看着像表头卡在两行数据中间。 */
+  --main-pad-top: 26px;
+  /* Logo 专用渐变。不复用 --accent/--accent2：那两个在墨色下是 #c15f4f→#5d9bb0，
+     深色背景上发闷。浅色主题这里压暗一档，否则金色在白底上看不清。 */
+  --logo-a: #e2542f;
+  --logo-b: #d09512;
   --bg: #f3eddf;
   --panel: #fdfbf4;
   --panel2: #eae2cf;
@@ -19,6 +28,8 @@
   --glow: rgba(162, 58, 44, 0.14);
 }
 :root[data-theme="dark"] {
+  --logo-a: #ff6b4a;
+  --logo-b: #f7c948;
   --bg: #16191f;
   --panel: #1d2128;
   --panel2: #232833;
@@ -62,11 +73,22 @@ a { color: var(--accent); }
 }
 .brand {
   display: flex; align-items: center; gap: 9px;
-  font-weight: 700; padding: 2px 10px 16px; font-size: 16.5px;
-  letter-spacing: 0.5px;
+  font-weight: 700; padding: 2px 10px 2px; font-size: 15px;
+  letter-spacing: 0.3px;
 }
-.brand .logo { width: 26px; height: 26px; }
-.ver { color: var(--muted); font-size: 10.5px; font-weight: 500; margin-left: auto; }
+.brand .logo { width: 30px; height: 30px; flex: none; }
+/* 中文名一行、LingTai OS 一行；版本号另起一行放在整块下面 */
+.brand-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.brand-en {
+  color: var(--ink); opacity: .78; font-size: 14.5px; font-weight: 600;
+  letter-spacing: 0.8px; margin-top: 3px;
+  display: flex; align-items: baseline; gap: 7px;
+}
+/* 版本号贴着 LingTai OS 走。单独占一行时它孤零零挂在左下角，跟品牌块是断的 */
+.ver {
+  color: var(--muted); font-size: 10.5px; font-weight: 500;
+  font-style: normal; letter-spacing: 0.2px; opacity: .9;
+}
 .nav-btn {
   text-align: left; padding: 9px 13px; border: 0; border-radius: 9px;
   background: transparent; color: var(--muted); font-size: 14px; cursor: pointer;
@@ -78,11 +100,28 @@ a { color: var(--accent); }
   color: var(--ink); font-weight: 600;
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.nav-foot { margin-top: auto; font-size: 11.5px; color: var(--muted); white-space: pre-line; padding: 8px 10px; }
+/* 开发者联系方式：贴在侧栏底部，点一下就能复制微信号。
+   分两行——208px 的侧栏里「开发者 VX：nexusaistart ＋ 复制」挤成三行，很难看 */
+.nav-dev {
+  margin-top: auto; padding: 8px 10px 2px; font-size: 11.5px; color: var(--muted);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.dev-label { font-size: 11px; opacity: .85; }
+.dev-row { display: flex; align-items: center; gap: 6px; }
+.nav-dev b { color: var(--ink); font-weight: 600; font-size: 12px; }
+/* 用真的 <button>：span 点得动但进不了无障碍树，键盘和读屏都够不着 */
+.dev-copy {
+  cursor: pointer; color: var(--accent); background: transparent;
+  border: 1px solid var(--border-soft); border-radius: 6px;
+  padding: 1px 6px; font-size: 10.5px; user-select: none; font-family: inherit;
+}
+.dev-copy:hover { background: var(--panel2); }
+.dev-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.nav-foot { font-size: 11.5px; color: var(--muted); white-space: pre-line; padding: 4px 10px 8px; }
 #theme-toggle { font-size: 12.5px; }
 
 /* ── 主区 ── */
-main { flex: 1; padding: 26px 32px 48px; min-width: 0; overflow-x: hidden; }
+main { flex: 1; padding: var(--main-pad-top) 32px 48px; min-width: 0; overflow-x: hidden; }
 main .section { animation: fadeUp 0.3s ease both; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 h2 {
@@ -174,11 +213,13 @@ input:focus, select:focus, textarea:focus, input[type="search"]:focus {
 }
 
 /* ── 表格 ── */
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+/* border-collapse:collapse 下边框归表格不归单元格，sticky th 一滚就和内容撕开；
+   separate + border-spacing:0 视觉一致，且 th 的背景/边框跟着它自己走 */
+table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
 th, td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border-soft); }
 th {
   background: var(--panel2); color: var(--muted); font-weight: 600; font-size: 11.5px;
-  letter-spacing: 0.8px; position: sticky; top: 0;
+  letter-spacing: 0.8px; position: sticky; top: calc(-1 * var(--main-pad-top)); z-index: 2;
 }
 tbody tr { transition: background 0.12s ease; }
 tbody tr:hover { background: var(--quote-bg); }
@@ -255,11 +296,46 @@ input, select {
   border-radius: 8px; padding: 8px 11px; font-size: 13.5px; width: 100%;
 }
 .q-label { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; font-size: 14px; }
-.q-label input[type="checkbox"] { width: auto; }
+/* 勾选项：框和文字同一行。默认的 column 是给「开工四问」那种上问下答的表单用的 */
+.q-label.inline { flex-direction: row; align-items: center; gap: 8px; margin: 6px 0; }
+.q-label input[type="checkbox"] { width: auto; flex: none; }
 .ok-box { background: color-mix(in srgb, var(--good) 9%, transparent); border: 1px solid color-mix(in srgb, var(--good) 35%, transparent); color: var(--good); border-radius: 9px; padding: 11px 15px; margin-top: 10px; }
 .bad-box { background: color-mix(in srgb, var(--bad) 9%, transparent); border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); color: var(--bad); border-radius: 9px; padding: 11px 15px; margin-top: 10px; }
 .muted-note { color: var(--muted); font-size: 13px; }
 .steps li { margin: 8px 0; }
+
+/* ── 弹出式文件夹选择器（点「添加项目」→ 开我的电脑 → 选中 → 确定）── */
+.modal-mask {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); width: min(860px, 94vw); max-height: 88vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.modal-head { padding: 14px 18px 10px; border-bottom: 1px solid var(--border-soft); }
+.modal-head h3 { margin: 0 0 8px; border: 0; }
+.modal-body { padding: 8px 10px; overflow: auto; flex: 1; min-height: 220px; }
+.modal-foot {
+  padding: 12px 18px; border-top: 1px solid var(--border-soft);
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.fs-row {
+  display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+  border-radius: 8px; cursor: pointer; font-size: 14px; border: 1px solid transparent;
+}
+.fs-row:hover { background: var(--quote-bg); }
+.fs-row.sel { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); }
+.fs-row.file { cursor: default; color: var(--muted); font-size: 13px; }
+.fs-row.file:hover { background: transparent; }
+.fs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-path {
+  font-family: Consolas, "Courier New", monospace; font-size: 12.5px;
+  color: var(--ink); background: var(--code-bg); border: 1px solid var(--border-soft);
+  border-radius: 6px; padding: 4px 8px; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .spin {
   display: inline-block; width: 14px; height: 14px;
   border: 2px solid var(--border); border-top-color: var(--accent);

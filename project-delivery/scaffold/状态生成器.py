@@ -75,15 +75,40 @@ def p_py_attr_len(root, spec):
     if not os.path.exists(path):
         raise ProbeError(u"模块不存在：%s" % path)
     d = os.path.dirname(path)
+    name = os.path.splitext(os.path.basename(path))[0]
+
+    if getattr(sys, "frozen", False):
+        # ⛔ 打包环境（灵台 exe）里 sys.executable 是宿主 exe，不是 python.exe。
+        # 拿它当解释器起隔离子进程 → 「unrecognized arguments: -X utf8 -c ...」，
+        # 探针会假报红：数其实好好的，红的是量具自己。而「零依赖」也不许改成去找系统 Python。
+        # → 退回进程内导入：隔离性没了（在自己的解释器里 exec 用户模块），但取得到真数；
+        #   导入真失败照样抛 ProbeError 报红，不静默返空。
+        import importlib.util
+        sys.path.insert(0, d)
+        try:
+            spec_obj = importlib.util.spec_from_file_location(name, path)
+            mod = importlib.util.module_from_spec(spec_obj)
+            spec_obj.loader.exec_module(mod)
+            n = len(getattr(mod, spec["attr"]))
+        except Exception as e:
+            raise ProbeError(u"进程内导入失败：%s" % repr(e)[:200])
+        finally:
+            if sys.path and sys.path[0] == d:
+                sys.path.pop(0)
+            sys.modules.pop(name, None)
+        return n, u"`%s`.%s → len=%d（进程内导入·打包环境无子进程隔离）" % (
+            spec["module"], spec["attr"], n)
+
     code = (
         "import sys,json\n"
         "sys.path[:0]=[%r]\n"
         "import %s as M\n"
         "print(json.dumps({'n': len(getattr(M, %r))}))\n"
-        % (d, os.path.splitext(os.path.basename(path))[0], spec["attr"])
+        % (d, name, spec["attr"])
     )
     r = subprocess.run([sys.executable, "-X", "utf8", "-c", code],
-                       capture_output=True, text=True, encoding="utf-8", cwd=d)
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", cwd=d)
     if r.returncode != 0:
         raise ProbeError(u"导入失败：%s" % (r.stderr or "")[-200:])
     try:
