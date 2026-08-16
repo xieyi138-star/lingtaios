@@ -90,7 +90,10 @@ for f in SEED:
         print("  %-22s ! 内容不同" % f); diff += 1
 
 a = md5(os.path.join(bundle, "AI开窗必读.md")) if bundle else None
-b = md5(os.path.join(SKILLS, "brain-console", "AI开窗必读.md"))
+# 接入卡在两种布局下都直接躺在 BC 下，不要再拼 brain-console 这一层：
+# 拼了的话在发布仓布局里指向不存在的文件，md5() 返回 None，这一件被判成
+# 「内容不同」——不是真的不同，是根本没读到。实测踩过。
+b = md5(os.path.join(BC, "AI开窗必读.md"))
 print("\n  %-22s %s" % ("AI开窗必读.md（接入卡）",
       "✓ 逐字节一致" if a and a == b else ("✗ 不在包里" if a is None else "! 内容不同")))
 if a is None: miss += 1
