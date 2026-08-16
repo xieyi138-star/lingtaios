@@ -431,8 +431,52 @@ def api_audit_delete(data):
     return 400, {"ok": False, "error": "kind 不合法"}
 
 
+# 失效判据的强度分档用词表。
+# 判据的唯一作用是「它成立时这条坑不可能再发生」——成立了就整行删。所以判据必须是
+# 一个能查真假的**结构性状态**。三种写法会让它形同虚设：
+#   循环（判据只是把防法换个说法，照它判永远判不出「已消除」）
+#   空话（靠人自觉：注意/记得/应该）
+#   不可判（没说谁来验、拿什么验）
+# ⛔ 这只是文本特征，判不了「判据对不对」——只能挑出可疑的给人看，别当结论。
+_CRIT_HARD = ("回归", "用例", "自检", "静态检查", "断言", "退出码", "报错", "拒绝", "抛错",
+              "工具", "校验", "字段", "元数据", "指纹", "版本号", "生成", "同源", "搜不到",
+              "创建不出来", "执行不了", "不允许", "不放行", "不许", "会被", "自动",
+              # 这几个是自检喂坏样本时补上的：「强制」「不存在」「必填」都是可查证的
+              # 结构性状态，漏了会把明确的强判据错判成中。
+              "强制", "不存在", "不再有", "必填", "拦下", "挡住")
+_CRIT_SOFT = ("注意", "记得", "应该", "尽量", "小心", "养成", "习惯", "牢记", "意识")
+
+
+def _crit_overlap(a, b):
+    """两段中文的字符重合率——判据和防法太像，就是把防法抄了一遍（循环）。"""
+    sa, sb = set(a or ""), set(b or "")
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / float(min(len(sa), len(sb)))
+
+
+def grade_criterion(crit, fix):
+    """给一条失效判据打强度：强 / 中 / 弱 + 可疑理由。"""
+    crit = (crit or "").strip()
+    if not crit or crit == "待补":
+        return "缺", "还没写"
+    if any(w in crit for w in _CRIT_SOFT):
+        return "弱", "靠人自觉，没有东西执行它"
+    hard = sum(1 for w in _CRIT_HARD if w in crit)
+    ov = _crit_overlap(crit, fix)
+    # ⛔ 光看「和防法像不像」会大面积误伤：中文常用字重合度天然就高，
+    #    实测把 5 条带「强制 / 不再有」的结构性判据全判成了循环。
+    #    真正的循环是**既抄了防法、又一个结构性词都没有**——那才是把「人照做」
+    #    当成了「坑已消除」。假阳性会让这条提示变噪音，人就不看了。
+    if ov >= 0.72 and hard == 0:
+        return "弱", "只是把防法换个说法（雷同 %d%%），照它判永远判不出「已消除」" % int(ov * 100)
+    if hard >= 2 and ov < 0.6:
+        return "强", "说清了谁来验、拿什么验"
+    return "中", "是结构性状态，但没写明谁来执行"
+
+
 def evolution_data(projects, pit_rows, health):
-    """进化审计五清单：待补判据 / 候选删除 / C类到期 / 交接过期 / 断头双份。"""
+    """进化审计六清单：待补判据 / **判据强度** / 候选删除 / C类到期 / 交接过期 / 断头双份。"""
     import datetime
     today = time.strftime("%Y-%m-%d")
     missing_invalid = [r for r in pit_rows if (r.get("失效判据") or "").strip() in ("", "待补")]
@@ -471,8 +515,19 @@ def evolution_data(projects, pit_rows, health):
     import datetime as _dt
     week_ago = (_dt.datetime.now() - _dt.timedelta(days=7)).strftime("%Y-%m-%d")
     new_this_week = sum(1 for r in pit_rows if (r.get("入库") or "") >= week_ago)
+    # 判据强度：让「这条判据可不可信」在界面上随手可见，而不是等到要删时才发现它是空话
+    graded, grade_stats = [], {"强": 0, "中": 0, "弱": 0, "缺": 0}
+    for r in pit_rows:
+        g, why = grade_criterion(r.get("失效判据"), r.get("防法（照做即可）"))
+        grade_stats[g] = grade_stats.get(g, 0) + 1
+        if g in ("弱", "缺"):
+            graded.append({"编号": r.get("编号", ""), "一句话坑": r.get("一句话坑", ""),
+                           "失效判据": (r.get("失效判据") or "").strip(),
+                           "grade": g, "why": why})
     return {
         "missing_invalid": missing_invalid,
+        "weak_criteria": graded,
+        "grade_stats": grade_stats,
         "candidates": candidates,
         "expired_todos": expired_todos,
         "stale_handoffs": stale_handoffs,
@@ -2018,6 +2073,19 @@ def main():
         ck(len(data["sources"]) >= 50, "逐文件清单解析 ≥50 条（实 %d）" % len(data["sources"]))
         ck(len(data["pitfall"]["rows"]) >= 30, "坑库解析 ≥30 条（实 %d）" % len(data["pitfall"]["rows"]))
         ck(len(data["projects"]) >= 3, "项目自动发现 ≥3（实 %d）" % len(data["projects"]))
+        # 判据强度分档：喂已知的三种坏写法，它必须都判出来——只验「有 grade_stats 字段」
+        # 等于没验（那是 P8：读数是 0 和读数只能是 0 长得一样）。
+        _gs = data["evolution"].get("grade_stats") or {}
+        _cases = [
+            ("以后注意别再这样", "改完回读", "弱"),                     # 空话
+            ("改完必 Read 回读；跨机走 md5", "改完必 Read 回读；跨机走 md5", "弱"),  # 循环：与防法同文
+            ("写操作封装强制回读校验，代码中不存在裸写接口", "改完回读", "强"),      # 说清谁来验
+            ("待补", "随便", "缺"),
+        ]
+        _bad = [c for c, f, want in _cases if grade_criterion(c, f)[0] != want]
+        ck(not _bad, "判据强度分档认得出空话/循环/结构性（统计：%s）"
+           % "/".join("%s%d" % (k, _gs.get(k, 0)) for k in ("强", "中", "弱", "缺")),
+           "判错：%s" % _bad)
         ck(len(data["methods"]) == 4, "四真源渲染齐")
         ck(any("{NEXUS}/00_core/装配图.md" in s["path"] for s in data["sources"]), "00_core 装配图指针已登记")
         t = api_templates()

@@ -636,7 +636,43 @@ function renderEvolutionInto(box) {
     ["🔄 通用件落后（体系已升级，项目可同步）", (DATA.sync || []).map(s => ({
       编号: s.project, path: s.path, line: "落后：" + s.outdated.join("、") })), "sync", r => r["编号"] + "：" + r.line],
   ];
+  // 判据强度：只读提示，不给勾选框——它不是「该删什么」，是「哪条判据当不了判据」。
+  // 混进下面那些可勾选清单会让人以为该删掉它们，正好判反。
+  const gs = ev.grade_stats || {};
+  const weak = ev.weak_criteria || [];
+  const gsTotal = (gs["强"] || 0) + (gs["中"] || 0) + (gs["弱"] || 0) + (gs["缺"] || 0);
+  let gradeHtml = "";
+  if (gsTotal) {
+    const badge = (t, n, cls) => n
+      ? '<span class="chip-btn ' + cls + '" style="cursor:default">' + t + " " + n + "</span> "
+      : "";
+    gradeHtml = '<div class="section"><h3>🧪 失效判据的强度（只读，供复核）</h3>' +
+      '<p class="muted-note">判据的唯一用处：<b>它成立时这条坑不可能再发生</b>——成立了就整行删。' +
+      "所以判据必须是能查真假的结构性状态，不能是「以后注意」。</p>" +
+      '<p style="margin:6px 0">' +
+      badge("强", gs["强"] || 0, "") + badge("中", gs["中"] || 0, "") +
+      badge("弱", gs["弱"] || 0, "bad-btn") + badge("缺", gs["缺"] || 0, "bad-btn") +
+      "</p>";
+    if (weak.length) {
+      const body = weak.map(r =>
+        '<p style="margin:6px 0"><b>' + esc(r["编号"]) + "</b> " +
+        esc((r["一句话坑"] || "").slice(0, 54)) +
+        '<br><span class="muted-note">判据：' + esc(r["失效判据"] || "（空）") +
+        "<br>可疑：" + esc(r.why) + "</span></p>").join("");
+      gradeHtml += weak.length > 5
+        ? "<details><summary><b>需要人看的 " + weak.length +
+          '</b><span class="muted-note"> · 点开</span></summary><div style="margin-top:8px">' +
+          body + "</div></details>"
+        : body;
+    } else {
+      gradeHtml += '<p class="muted-note">没有「弱」或「缺」的判据。' +
+        "「中」档也别全信——机械分档只看文本特征，判不了判据对不对。</p>";
+    }
+    gradeHtml += "</div>";
+  }
+
   let html = '<p class="muted-note">每周跑一次（双击即重算）。勾选 → 点删除 → 真源行被删（git 有回滚点）。</p>' +
+    gradeHtml +
     // 同样的道理：提到「方法」页就得能点过去，别让人自己找 tab
     '<div class="section"><h3>🔴 断头 / 双份（只读，' +
     '<a href="#" id="ev-goto-method">去「方法」页查装配图修指针 →</a>）</h3>' +
