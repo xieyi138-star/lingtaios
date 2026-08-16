@@ -6,17 +6,21 @@
 ## 怎么跑
 
 ```
-python -X utf8 tests\stress_a.py
+python -X utf8 tests\run_all.py          # 全量，一条命令，跑完自动把服务起回来
+python -X utf8 tests\stress_a.py         # 单跑某一个
 ```
 
 cwd 无所谓，脚本自己定位（`BC` 从 `__file__` 推）。
 
 ⛔ **每个脚本跑完都会清掉 8765 上的进程**（它们要独占端口做测试）。
-跑完记得把服务起回来，否则浏览器里那个页面会报 `TypeError: Failed to fetch`：
+单跑时记得把服务起回来，否则浏览器里那个页面会报 `TypeError: Failed to fetch`
+（上一窗就是忘了这步，误报过一次「产品挂了」）：
 
 ```
 Start-Process dist\lingtaios.exe -WorkingDirectory dist
 ```
+
+`run_all.py` 把这步做进了 `finally`，跑全量不用记。
 
 ⛔ 脚本一律用 `--roots-file` 指向临时沙盒，**不碰真 roots.json 和真 site/data.json**。
 `no_pollute_test.py` 就是专门守这条的——它比对操作前后两个真文件的 md5。
@@ -43,25 +47,20 @@ Start-Process dist\lingtaios.exe -WorkingDirectory dist
 | `pick_lock_test.py` | 对话框开着时重复点被拒（409），不弹第二个 | 4/4 |
 | `nav_check.py` | 侧栏文案在 exe 里正确 | 全 PASS |
 | `detail_live_check.py` | 对着正在跑的服务，把每个项目详情逐个打开 | 全 200 |
+| `repo_parity.py` | **两仓红线**：发布镜像仓同名文件与主源码逐字节一致，且主源码无未登记去向的文件 | 全 PASS |
+| `run_all.py` | 全量跑完并自动起回服务（不是被验对象，是跑手） | — |
 
 ## 全量跑一遍
 
 ```
-python -X utf8 tests\soul_manifest.py
-python -X utf8 tests\two_form_parity.py
-python -X utf8 tests\stress_a.py
-python -X utf8 tests\stress_b.py
-python -X utf8 tests\destructive_probe.py
-python -X utf8 tests\project_mgmt_stress.py
-python -X utf8 tests\exe_mgmt_check.py
-python -X utf8 tests\no_pollute_test.py
-python -X utf8 tests\workspace_e2e.py
-python -X utf8 tests\finder_e2e.py
-python -X utf8 tests\wizard_v3_e2e.py
-python -X utf8 tests\dedup_back_e2e.py
-python -X utf8 tests\brand_check.py
-node tests\dedup_front.js
+python -X utf8 tests\run_all.py
 ```
+
+默认跳过 `native_pick_e2e` / `pick_lock_test`——它们会弹原生文件夹对话框挡在屏幕上；
+要跑加 `--with-dialogs`，人别走开。跑完 runner 自己会把 8765 上的服务起回来。
+
+以前这里是 14 条要人一条条敲的命令。漏跑不会有人知道——没跑过的脚本和跑绿的脚本，
+在人脑里长得一模一样。
 
 ## 注意
 
