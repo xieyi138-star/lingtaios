@@ -30,7 +30,9 @@ PY = sys.executable
 
 # 会杀 8765 的常规脚本，按依赖顺序排（重的放前面，快的放后面）
 SUITE = [
-    "repo_parity.py",        # 两仓一致性：不动服务，先跑掉
+    "repo_parity.py",            # 两仓一致性：不动服务，先跑掉
+    "clone_smoke.py",            # 坑库 P23 的执行者：真 clone 一份从头走（验的是发布仓 HEAD）
+    "persist_after_restart.py",  # 坑库 R4 的执行者：写入→重启进程→复查仍在
     "soul_manifest.py",
     "two_form_parity.py",
     "stress_a.py",

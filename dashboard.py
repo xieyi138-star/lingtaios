@@ -49,7 +49,15 @@ if _FROZEN and os.name == "nt":
 if _FROZEN:
     HERE = os.path.dirname(os.path.abspath(sys.executable))
     BUNDLE = sys._MEIPASS  # noqa
-    REPO = BUNDLE
+    # ⛔ REPO 曾经 = BUNDLE，也就是 PyInstaller 每次启动新建的临时解压目录 _MEIxxxx。
+    # 后果：坑库/装配图/方法论真源全指向临时目录——用户点「记坑」，接口返回 200、
+    # 界面条数也涨了，**但进程一退出临时目录被清理，那条坑就没了**，而且悄无声息。
+    # 实测：记一条 T6，rows 38→39，重启 exe 回到 38，主源码真源 md5 全程未变。
+    # 这直接违反产品第一承诺「记忆归你 / 记忆是你的资产」，比装不上更坏——
+    # 装不上是立刻可见的，这个是用着用着记忆没了。
+    # 现在 REPO 指向 exe 旁边的持久目录，出厂模板首跑从 BUNDLE 落过来（见 _seed_repo）。
+    # BUNDLE 只留给程序资源（web/），那些本来就该随包走、不该用户改。
+    REPO = HERE
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLE = None
@@ -1887,6 +1895,44 @@ def serve(open_browser):
         print("\n已停。")
 
 
+def _seed_repo():
+    """exe 首跑：把出厂的方法论真源从只读的 BUNDLE 落到 exe 旁边（REPO = HERE）。
+
+    落盘之后，坑库/装配图/常驻薄核等的读写都走这份持久副本——那是**用户的资产**，
+    必须活过进程退出。以前 REPO 直接指 BUNDLE（临时解压目录），记进去的坑重启就没。
+
+    ⛔ 逐文件「不存在才复制」，绝不覆盖已有的：用户记的坑、改过的装配图都在这些
+       文件里，升级 exe 不许把它们冲掉。
+    ⛔ 代价要说出来：正因为不覆盖，**新版 exe 带的方法论更新也不会自动生效**。
+       这是有意的取舍（宁可旧，不可丢），差异的传播走界面上的「同步通用件」。
+    """
+    if not BUNDLE:
+        return
+    landed = 0
+    for top in ("project-delivery", "agent-worksheet"):
+        src_root = os.path.join(BUNDLE, top)
+        if not os.path.isdir(src_root):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(src_root):
+            rel = os.path.relpath(dirpath, src_root)
+            dst_dir = os.path.join(REPO, top) if rel == "." else os.path.join(REPO, top, rel)
+            for fn in filenames:
+                dst = os.path.join(dst_dir, fn)
+                if os.path.isfile(dst):
+                    continue                      # 用户的，动都不动
+                try:
+                    if not os.path.isdir(dst_dir):
+                        os.makedirs(dst_dir)
+                    shutil.copyfile(os.path.join(dirpath, fn), dst)
+                    landed += 1
+                except OSError as e:
+                    # 兜底必须出声：落不下去就等于又回到「记了会丢」，不许静默
+                    print("[!!] 出厂真源落盘失败 %s：%s" % (fn, e))
+    if landed:
+        print("[首跑] 已把 %d 个出厂方法论文件落到 %s" % (landed, REPO))
+        print("       以后你在这里改的、记的，都归你——升级 exe 不会覆盖它们。")
+
+
 def main():
     ap = argparse.ArgumentParser(description="大脑驾驶舱")
     ap.add_argument("--no-browser", action="store_true")
@@ -1906,6 +1952,7 @@ def main():
                     shutil.copyfile(src, dst)
                 except OSError:
                     pass
+        _seed_repo()
         if not os.path.isfile(ROOTS_FILE):
             home = os.path.expanduser("~")
             roots = {

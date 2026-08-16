@@ -48,6 +48,8 @@ Start-Process dist\lingtaios.exe -WorkingDirectory dist
 | `nav_check.py` | 侧栏文案在 exe 里正确 | 全 PASS |
 | `detail_live_check.py` | 对着正在跑的服务，把每个项目详情逐个打开 | 全 200 |
 | `repo_parity.py` | **两仓红线**：发布镜像仓同名文件与主源码逐字节一致，且主源码无未登记去向的文件 | 全 PASS |
+| `clone_smoke.py` | **坑库 P23 的执行者**：真 clone 发布仓 HEAD，装→跑→打包→自检四步全走，并扫有没有作者的真实用户名 | 全 PASS |
+| `persist_after_restart.py` | **坑库 R4 的执行者**：写入→**重启进程**→复查仍在。只验返回码的测试抓不到打包态把临时目录当数据目录 | 全 PASS |
 | `run_all.py` | 全量跑完并自动起回服务（不是被验对象，是跑手） | — |
 
 ## 全量跑一遍
@@ -66,7 +68,9 @@ python -X utf8 tests\run_all.py
 
 - 脚本里**不含任何绝对路径**：`BC` 从 `__file__` 推（tests 的上一级），`EXE` 在
   `release_pkg\` 和 `dist\` 里挑存在的那个。所以从任意 cwd、任意机器 clone 下来都能直接跑。
-  （2026-08-16 之前这里写死 `C:\Users\Administrator\...`，换台机器整套跑不起来——同一个病 spec 里也犯过。）
+  （2026-08-16 之前这里写死了作者本机的 `C:\Users\<用户名>\.claude\skills\brain-console`，
+  换台机器整套跑不起来——同一个病 spec 和 install.py 里也犯过。连举例都别写真实用户名：
+  `clone_smoke.py` 会扫发布仓里有没有真实用户名，写了就报红。）
 - 改了 `dashboard.py` / `web/` 之后要**先重新打包**再跑那些验 exe 的脚本
   （`soul_manifest` / `two_form_parity` / `exe_mgmt_check` / `brand_check` / `nav_check` / `stress_*`），
   否则验的是旧 exe。
