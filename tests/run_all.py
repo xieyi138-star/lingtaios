@@ -34,6 +34,7 @@ SUITE = [
     "clone_smoke.py",            # 坑库 P23 的执行者：真 clone 一份从头走（验的是发布仓 HEAD）
     "persist_after_restart.py",  # 坑库 R4 的执行者：写入→重启进程→复查仍在
     "fresh_user_e2e.py",         # 全新用户第一次打开（没有作者那套目录）——有真实用户后最靠前的一条
+    "cn_path_e2e.py",            # 解压到中文+空格路径下还能不能用（中国用户的默认情况）
     "soul_manifest.py",
     "two_form_parity.py",
     "stress_a.py",

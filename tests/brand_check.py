@@ -37,8 +37,11 @@ checks = [
     ("品牌名 = 灵台AI操作系统", "灵台AI操作系统" in html),
     ("LingTai OS 保留", 'class="brand-en">LingTai OS<' in html),
     ("LingTai OS 已放大到 14.5px", "font-size: 14.5px" in css),
+    # 这条验的是版本号的**位置**（跟在 LingTai OS 后面、不再单独一行），不是它的值。
+    # 原来写死 v0.1.1，一升版就假红——等于把版本号又抄了一份（P10：同一数字抄多份必分叉）。
+    # 「三处版本号一致」由 make_release.py 的发布闸负责，这里不重复。
     ("版本号跟在 LingTai OS 后面（不再单独一行）",
-     '<i class="ver">v0.1.1</i>' in html and 'class="brand-ver"' not in html),
+     'LingTai OS<i class="ver">v' in html and 'class="brand-ver"' not in html),
     ("Logo = 2 号（星＋三级台阶）", html.count('<rect x="8.4"') == 1 and 'cx="12" cy="4.6"' in html),
     ("Logo 用亮色渐变变量", "--logo-a" in css and "#ff6b4a" in css),
     ("浅色主题有单独的压暗版", "#e2542f" in css),

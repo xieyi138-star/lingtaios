@@ -51,6 +51,7 @@ Start-Process dist\lingtaios.exe -WorkingDirectory dist
 | `clone_smoke.py` | **坑库 P23 的执行者**：真 clone 发布仓 HEAD，装→跑→打包→自检四步全走，并扫有没有作者的真实用户名 | 全 PASS |
 | `persist_after_restart.py` | **坑库 R4 的执行者**：写入→**重启进程**→复查仍在。只验返回码的测试抓不到打包态把临时目录当数据目录 | 全 PASS |
 | `fresh_user_e2e.py` | **全新用户第一次打开**：一台没有 NEXUS/D 根、零项目的机器上，服务起得来／首页不白屏／空状态有引导／建得出第一个项目／建完能在列表里看见 | 13 项全 PASS |
+| `cn_path_e2e.py` | **解压到中文+空格路径**（「下载\灵台 OS」这种，中国用户的默认情况）：自检／落盘／起服务／中文项目名／建完可见 | 8 项全 PASS |
 | `run_all.py` | 全量跑完并自动起回服务（不是被验对象，是跑手） | — |
 
 ## 全量跑一遍
