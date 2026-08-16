@@ -3,6 +3,9 @@ site/
 roots.json
 dist/
 build/
-*.spec
+release_pkg/
 __pycache__/
 *.pyc
+
+# ⛔ 不许忽略 *.spec。lingtaios.spec 是打包配方，clone 下来的人要靠它打包；
+# 忽略掉就等于发了一个「自己构建不出来」的仓。路径已改成从 SPECPATH 自推导，两种布局都认。
