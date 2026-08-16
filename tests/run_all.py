@@ -18,6 +18,7 @@
 """
 import argparse
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -113,6 +114,22 @@ def main():
         print("=== 常规回归（每个跑完都会清掉 8765）===")
         for s in SUITE:
             results.append(run(s))
+        # dedup_front.js 是唯一的 JS 单测，要 node。没装就明说跳过——
+        # 静默漏掉一个脚本，和它跑绿了，在汇总里长得一模一样。
+        node = shutil.which("node")
+        if node:
+            p = os.path.join(TESTS, "dedup_front.js")
+            r = subprocess.run([node, p], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            out = (r.stdout or b"").decode("utf-8", errors="replace")
+            tail = [ln for ln in out.strip().splitlines() if ln.strip()]
+            red = r.returncode != 0 or "FAIL" in out
+            print("  %-24s %s        %s" % ("dedup_front.js", "红" if red else "绿",
+                                            (tail[-1] if tail else "")[:70]))
+            results.append(("dedup_front.js", not red, tail[-1] if tail else ""))
+        else:
+            print("  %-24s 跳过        没装 node，这条 JS 单测没跑" % "dedup_front.js")
+            results.append(("dedup_front.js", None, "没装 node"))
+
         if args.with_dialogs:
             print("=== 原生对话框（会弹窗，别动鼠标）===")
             for s in DIALOG:
