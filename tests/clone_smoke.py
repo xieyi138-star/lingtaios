@@ -29,6 +29,7 @@ import tempfile
 
 BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MIRROR = os.environ.get("LINGTAI_MIRROR") or r"D:\tmp\lingtaios-repo"
+HOME = os.path.expanduser("~")   # 本机真实家目录，运行时取，不写死
 PY = sys.executable
 DN = subprocess.DEVNULL
 FULL = "--full" in sys.argv or os.environ.get("CLONE_SMOKE_FULL") == "1"
@@ -71,8 +72,10 @@ def main():
                         t = f.read()
                 except OSError:
                     continue
-                # 「C:\Users\<某人>」这种讲道理的示例文字不算，带真实用户名的才算
-                if "C:\\Users\\Administrator" in t:
+                # 找的是**本机真实家目录**出现在发布物里，不是「C:\Users\<你>」这种示例写法。
+                # ⛔ 别把用户名写死在这一行——写死了换台机器就检测不到，而且这行自己
+                #    会被自己的检测抓到（第一次就是这么被 GitHub clone 扫出来的）。
+                if HOME in t:
                     leaked.append(os.path.relpath(p, repo))
         results.append(("clone 里没有作者的绝对路径" +
                         ("" if not leaked else "（泄漏：%s）" % ", ".join(leaked[:3])),
