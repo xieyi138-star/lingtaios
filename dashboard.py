@@ -407,6 +407,10 @@ def evolution_data(projects, pit_rows, health):
                 continue
             if age > 7:
                 stale_handoffs.append({"project": p["name"], "path": p["path"], "days": int(age)})
+    # 本周新增坑（"越用越强"的可见证据）
+    import datetime as _dt
+    week_ago = (_dt.datetime.now() - _dt.timedelta(days=7)).strftime("%Y-%m-%d")
+    new_this_week = sum(1 for r in pit_rows if (r.get("入库") or "") >= week_ago)
     return {
         "missing_invalid": missing_invalid,
         "candidates": candidates,
@@ -414,6 +418,8 @@ def evolution_data(projects, pit_rows, health):
         "stale_handoffs": stale_handoffs,
         "broken": health["missing"],
         "identical_pairs": health["identical_pairs"],
+        "new_this_week": new_this_week,
+        "total_pitfalls": len(pit_rows),
     }
 
 
@@ -481,6 +487,15 @@ def sync_probe(projects):
         if outdated:
             out.append({"project": p["name"], "path": p["path"], "outdated": outdated})
     return out
+
+
+def api_refresh(data):
+    """深查：重算全部真源（快照 vs 深查，抄 OpenClaw 状态分档）。"""
+    try:
+        d = build(load_roots(), SITE)
+        return 200, d
+    except Exception as e:
+        return 500, {"ok": False, "error": str(e)}
 
 
 def api_sync_project(data):
@@ -946,6 +961,11 @@ def serve(open_browser):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=WEB, **kw)
 
+        def end_headers(self):
+            # 禁止浏览器缓存：界面升级后用户永远看到最新版
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
         def _json(self, status, payload):
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
@@ -984,6 +1004,7 @@ def serve(open_browser):
                 "/api/add_pitfall": lambda: api_add_pitfall(data),
                 "/api/audit_delete": lambda: api_audit_delete(data),
                 "/api/sync_project": lambda: api_sync_project(data),
+                "/api/refresh": lambda: api_refresh(data),
             }
             fn = routes.get(self.path)
             if fn:

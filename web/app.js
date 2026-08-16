@@ -37,12 +37,27 @@ const PROJ_STATE = {
 function isActive(p) { return p.state || p.alarms.length || p.handoff_mtime; }
 function organN(p) { return Object.values(p.organs).filter(Boolean).length; }
 
+const ORG_DOTS = [["法典", "01_法典.md"], ["状态", "02_状态.md"], ["排产", "03_在建.md"],
+  ["监察", "关口清单.md"], ["记忆", "04_待办池.md"], ["进化", "06_提案层.md"]];
+
+function organDots(p) {
+  const stale = p.state_at
+    ? (Date.now() - new Date(p.state_at.replace(" ", "T")).getTime()) / 86400000 > 7
+    : true;
+  return '<span class="dots">' + ORG_DOTS.map(([name, file]) => {
+    const has = p.organs[file];
+    const cls = !has ? "d-none" : (stale ? "d-stale" : "d-ok");
+    const tip = name + (has ? (stale ? "（状态超 7 天未更新）" : "（新）") : "（缺失）");
+    return '<i class="dot ' + cls + '" title="' + tip + '"></i>';
+  }).join("") + "</span>";
+}
+
 function slimCard(p) {
   const [scls, sl] = PROJ_STATE[p.state] || PROJ_STATE.null;
   const n = organN(p);
   return '<div class="card slim clickable" data-path="' + esc(p.path) + '"><div class="card-head"><strong>' + esc(p.name) + "</strong>" +
     '<span class="chip ' + scls + '">' + sl + "</span></div>" +
-    '<div class="chip-row">' +
+    '<div class="chip-row">' + organDots(p) +
     '<span class="chip ' + (n > 0 ? "good" : "muted") + '">器官 ' + n + "/9</span>" +
     (p.alarms.length ? '<span class="chip warn">告警 ' + p.alarms.length + "</span>" : "") +
     (p.outdated && p.outdated.length ? '<span class="chip warn">⚠ 可升级 ' + p.outdated.length + "</span>" : "") +
@@ -211,12 +226,23 @@ function renderHome() {
   const h = DATA.health;
   const alarmProjects = DATA.projects.filter(p => p.alarms.length);
   const active = DATA.projects.filter(isActive);
+  const pct = h.total ? Math.round(h.ok / h.total * 100) : 0;
+  const R = 52, C = 2 * Math.PI * R;
+  const ringColor = h.missing.length ? "#fb7185" : "#34d399";
+  const ring = '<div class="hero-ring">' +
+    '<svg width="128" height="128" viewBox="0 0 128 128"><defs>' +
+    '<linearGradient id="ringGrad" x1="0" y1="1" x2="1" y2="0">' +
+    '<stop offset="0" stop-color="' + ringColor + '"/><stop offset="1" stop-color="#6ea8fe"/>' +
+    "</linearGradient></defs>" +
+    '<circle class="ring-bg" cx="64" cy="64" r="' + R + '"/>' +
+    '<circle class="ring-val" cx="64" cy="64" r="' + R + '" stroke-dasharray="' + C + '" stroke-dashoffset="' + (C * (1 - pct / 100)).toFixed(1) + '"/>' +
+    '</svg><div class="ring-num"><b>' + h.ok + "</b><span>/ " + h.total + " 真源在位</span></div></div>";
   const tiles = [
-    ["真源在位", h.ok + "/" + h.total, h.missing.length ? "bad" : "good"],
     ["告警项目", String(alarmProjects.length), alarmProjects.length ? "warn" : "good"],
     ["项目总数", String(DATA.projects.length), "good"],
+    ["坑库", String(DATA.pitfall.rows.length), "good"],
   ];
-  let html = '<div class="hero">' + tiles.map(t =>
+  let html = '<div class="hero">' + ring + tiles.map(t =>
     '<div class="tile ' + t[2] + '"><div class="tile-num">' + esc(t[1]) + '</div><div class="tile-label">' + esc(t[0]) + "</div></div>"
   ).join("") + "</div>";
 
@@ -224,7 +250,9 @@ function renderHome() {
     '<p class="muted-note">红绿灯全绿 → 复制 → 粘给任何 AI → 开工。收窗不用管——AI 分段落盘，进度一直在文件里。</p>' +
     '<div class="filter-row">' +
     '<button class="chip-btn primary" id="h-open-btn">📋 复制开窗三句话</button>' +
-    '<button class="chip-btn accent-btn" id="h-newproj">＋ 新项目（自动装六器官）</button></div>' +
+    '<button class="chip-btn accent-btn" id="h-newproj">＋ 新项目（自动装六器官）</button>' +
+    '<button class="chip-btn" id="h-refresh">🔄 深查（重算全部真源）</button></div>' +
+    '<p class="muted-note">快照生成于 ' + esc(DATA.generated_at) + " · 数据全部机器生成，人不手写</p>" +
     '<p class="muted-note" id="h-note"></p></div>';
 
   const ev = DATA.evolution || {};
@@ -233,13 +261,19 @@ function renderHome() {
     html += '<div class="section"><h2>🔴 先修这里</h2><ul>' +
       h.missing.map(m => "<li>" + esc(m.path) + " → " + esc(m.resolved) + "</li>").join("") +
       h.identical_pairs.map(p => "<li>同名同内容双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</li>").join("") +
-      (staleN ? "<li>🟡 有 " + staleN + " 个项目的交接超 7 天没更新——该生核了（见「进化」页）</li>" : "") +
+      (staleN ? "<li>🟡 有 " + staleN + " 个项目的交接超 7 天没更新——该生核了（见「设置 → 进化审计」）</li>" : "") +
       "</ul></div>";
   }
   if (alarmProjects.length) {
     html += '<div class="section"><h2>⚠ 有告警的项目</h2><div class="cards">' +
       alarmProjects.map(slimCard).join("") + "</div></div>";
   }
+  html += '<div class="section" style="margin-bottom:14px"><span class="muted-note">' +
+    '🧠 经验库 <b>' + esc(ev.total_pitfalls || DATA.pitfall.rows.length) + '</b> 条' +
+    (ev.new_this_week ? '（本周 +' + esc(ev.new_this_week) + "）" : "") +
+    ' · <a href="#" id="h-goto-pitfall">查坑/记坑</a>' +
+    ' · <a href="#" id="h-goto-sys">设置与审计</a>' +
+    "</span></div>";
   html += '<div class="section"><h2>进行中的项目（' + active.length + '）</h2><div class="cards">' +
     active.slice(0, 6).map(slimCard).join("") + "</div>" +
     (active.length > 6 ? '<p class="muted-note">更多见「项目」页 →</p>' : "") +
@@ -249,6 +283,20 @@ function renderHome() {
   main.innerHTML = html;
   attachCardClicks();
   document.getElementById("h-newproj").onclick = () => go("newproj");
+  document.getElementById("h-goto-pitfall").onclick = e => { e.preventDefault(); go("pitfall"); };
+  document.getElementById("h-goto-sys").onclick = e => { e.preventDefault(); go("system"); };
+  document.getElementById("h-refresh").onclick = async () => {
+    const b = document.getElementById("h-refresh");
+    b.disabled = true; b.textContent = "🔄 深查中…";
+    try {
+      const r = await fetch("api/refresh", { method: "POST" });
+      const d = await r.json();
+      if (d.generated_at) { DATA = d; renderHome(); }
+      else { b.disabled = false; b.textContent = "✗ " + (d.error || "深查失败"); }
+    } catch (e) {
+      b.disabled = false; b.textContent = "✗ 深查失败";
+    }
+  };
   fetch("api/templates", { method: "POST" }).then(r => r.json()).then(t => {
     document.getElementById("h-open-btn").onclick = async () => {
       const ok = await copyText(t.open);
@@ -350,8 +398,8 @@ function drawPitRows() {
   else if (pitLimit < rows.length) pitLimit += PIT_PAGE;
 }
 
-/* ---------- 进化页（活壳：涨要门槛 / 留要条规 / 汰要机制） ---------- */
-function renderEvolution() {
+/* ---------- 进化审计（渲染进设置页 tab） ---------- */
+function renderEvolutionInto(box) {
   const ev = DATA.evolution || {};
   const secs = [
     ["待补失效判据（只降不涨才是活）", ev.missing_invalid || [], "pitfall",
@@ -365,9 +413,8 @@ function renderEvolution() {
     ["🔄 通用件落后（体系已升级，项目可同步）", (DATA.sync || []).map(s => ({
       编号: s.project, path: s.path, line: "落后：" + s.outdated.join("、") })), "sync", r => r["编号"] + "：" + r.line],
   ];
-  let html = '<div class="section"><h2>进化审计 · 五清单</h2>' +
-    '<p class="muted-note">每周跑一次（双击即重算）。勾选 → 点删除 → 真源行被删（git 有回滚点）。</p>' +
-    '<div class="section"><h3>🔴 断头 / 双份（只读，去「体系」页修指针）</h3>' +
+  let html = '<p class="muted-note">每周跑一次（双击即重算）。勾选 → 点删除 → 真源行被删（git 有回滚点）。</p>' +
+    '<div class="section"><h3>🔴 断头 / 双份（只读，去「方法」页查装配图修指针）</h3>' +
     ((ev.broken || []).map(m => "<p>断头：" + esc(m.path) + "</p>").join("") +
      (ev.identical_pairs || []).map(p => "<p>双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</p>").join("") ||
      '<p class="muted-note">无。</p>') + "</div>";
@@ -387,11 +434,11 @@ function renderEvolution() {
     html += '<div class="filter-row"><button class="chip-btn bad-btn" id="ev-delete">🗑 删除所选（不可恢复，git 有回滚点）</button></div>' +
       '<div id="ev-result"></div>';
   }
-  main.innerHTML = html;
+  box.innerHTML = html;
   const delBtn = document.getElementById("ev-delete");
   if (delBtn) {
     delBtn.onclick = async () => {
-      const checked = [...document.querySelectorAll('#main input[type="checkbox"]:checked')];
+      const checked = [...box.querySelectorAll('input[type="checkbox"]:checked')];
       if (!checked.length) {
         document.getElementById("ev-result").innerHTML =
           '<div class="bad-box">✗ 先勾选要删的条目</div>';
@@ -432,26 +479,28 @@ function renderEvolution() {
   }
 }
 
-/* ---------- 体系页：方法四真源 / 装配图 / 四问 / 移植 ---------- */
+/* ---------- 设置页：进化审计 / 开工四问 / 换机 / 方法 ---------- */
 function renderSystem() {
-  let html = '<div class="section"><h2>体系</h2>' +
+  let html = '<div class="section"><h2>设置</h2>' +
     '<div class="doc-tabs">' +
-    '<button class="doc-tab stab active" data-s="methods">方法四真源</button>' +
-    '<button class="doc-tab stab" data-s="map">装配图</button>' +
+    '<button class="doc-tab stab active" data-s="evolve">进化审计（每周一次）</button>' +
     '<button class="doc-tab stab" data-s="fourq">开工四问</button>' +
     '<button class="doc-tab stab" data-s="portable">换机</button>' +
+    '<button class="doc-tab stab" data-s="methods">方法</button>' +
     '</div><div id="sys-box"></div></div>';
   main.innerHTML = html;
   document.querySelectorAll(".stab").forEach(b => b.onclick = () => {
     document.querySelectorAll(".stab").forEach(x => x.classList.toggle("active", x === b));
     renderSysTab(b.dataset.s);
   });
-  renderSysTab("methods");
+  renderSysTab("evolve");
 }
 
 function renderSysTab(which) {
   const box = document.getElementById("sys-box");
-  if (which === "methods") {
+  if (which === "evolve") {
+    renderEvolutionInto(box);
+  } else if (which === "methods") {
     box.innerHTML = '<div class="doc-tabs">' +
       DATA.methods.map((m, i) => '<button class="doc-tab" data-i="' + i + '">' + esc(m.name) + "</button>").join("") +
       '</div><div class="doc" id="doc-box">' + DATA.methods[0].html + "</div>";
@@ -572,7 +621,6 @@ const PAGES = {
   home: renderHome,
   projects: renderProjects,
   pitfall: renderPitfall,
-  evolution: renderEvolution,
   system: renderSystem,
   newproj: renderNewProject,
 };
@@ -584,6 +632,23 @@ function go(page) {
 }
 
 document.querySelectorAll(".nav-btn").forEach(b => b.onclick = () => go(b.dataset.page));
+
+/* 主题切换：墨色（默认）⇄ 宣纸，选择持久化 */
+(function () {
+  const tb = document.getElementById("theme-toggle");
+  if (!tb) return;
+  const upd = () => {
+    const dark = document.documentElement.dataset.theme === "dark";
+    tb.textContent = dark ? "☀️ 宣纸" : "🌙 墨色";
+  };
+  upd();
+  tb.onclick = () => {
+    document.documentElement.dataset.theme =
+      document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("lt-theme", document.documentElement.dataset.theme); } catch (e) {}
+    upd();
+  };
+})();
 
 fetch("data.json")
   .then(r => r.json())
