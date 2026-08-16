@@ -260,7 +260,15 @@ def api_create_project(data):
     if not PROJECT_NAME_RE.match(name) or name in (".", ".."):
         return 400, {"ok": False, "error": "项目名含非法字符（限中英文/数字/-/空格）"}
     roots = load_roots()
-    choice = data.get("root_choice", "nexus")
+    # ⛔ 默认值曾经是 "nexus"——把作者机器上的 C:\nexus_local 当成了所有人的默认落点。
+    # 界面会按实况生成选项所以没暴露，但直接调 API 的（比如 AI 代跑）一撞一个准。
+    # 现在不给默认：没指定就报错，并把这台机器上**实际可用**的选项列出来。
+    choice = (data.get("root_choice") or "").strip().lower()
+    avail = [a.lower() for a in ("NEXUS", "D") if roots.get(a)]
+    if not choice:
+        return 400, {"ok": False, "error":
+                     "没指定落点 root_choice。这台机器可选：%s；或用 custom 并给 custom_path"
+                     % (", ".join(avail) if avail else "（本机没有已配置的业务根，只能用 custom）")}
     if choice == "nexus":
         base = roots.get("NEXUS")
     elif choice == "d":
@@ -268,11 +276,15 @@ def api_create_project(data):
     elif choice == "custom":
         base = (data.get("custom_path") or "").strip()
         if not base or not os.path.isdir(base):
-            return 400, {"ok": False, "error": "自定义路径不存在"}
+            return 400, {"ok": False, "error": "自定义路径不存在：%s" % (base or "（空）")}
     else:
-        return 400, {"ok": False, "error": "root_choice 不合法"}
+        return 400, {"ok": False, "error": "root_choice 不合法：%s（可选 nexus / d / custom）" % choice}
     if not base:
-        return 400, {"ok": False, "error": "所选根未配置（先跑 install.py）"}
+        # 别再叫人去跑 install.py——下载 exe 用的人根本没有源码，跑不了。
+        return 400, {"ok": False, "error":
+                     "这台机器上没配 {%s} 这个根。换个落点：用 custom 指定一个文件夹"
+                     "（新项目页「选一个文件夹…」），或到设置里把根配上。"
+                     % choice.upper()}
     target = os.path.abspath(os.path.join(base, name))
     rej = _reject_sandbox(target, roots)
     if rej:
@@ -297,11 +309,18 @@ def api_create_project(data):
     if map_row is None:
         map_row = target  # 自定义路径：绝对路径登记（本机专属）
     _register_in_map("### L6", "| `%s` | 项目层 | 向导创建 %s |" % (map_row, time.strftime("%Y-%m-%d")))
-    # 重建 data.json，项目页立即可见
+    # ⛔ 登记进装配图**还不够**：discover_projects 只认 L6 里 {D}/ 开头的行，
+    # 自定义落点登记的是绝对路径，它不认——于是项目建出来了、六器官也落盘了，
+    # 项目库里却是空的。新用户 100% 撞这个：他没有 NEXUS/D 根，只能选自定义落点。
+    # 所以创建完一律显式登记进项目库，跟「＋ 添加项目」走同一条路。
     try:
-        build(load_roots(), ACTIVE_SITE)
+        with _CONF_LOCK:
+            _project_add_locked(target, False)   # 它内部会 build，下面就不用再 build
     except Exception:
-        pass
+        try:
+            build(load_roots(), ACTIVE_SITE)
+        except Exception:
+            pass
     return 200, {"ok": True, "path": target, "organs": SCAFFOLD_FILES,
                  "generator": gen}
 
