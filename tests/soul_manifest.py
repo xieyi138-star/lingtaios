@@ -7,7 +7,12 @@ BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tests 的�
 # 谁在就用谁，否则这行在别人机器上直接 FileNotFoundError。首选保持原样，不改语义。
 _CAND = [os.path.join(BC, d, "lingtaios.exe") for d in ("release_pkg", "dist")]
 EXE = next((p for p in _CAND if os.path.isfile(p)), _CAND[0])
-SKILLS = os.path.dirname(BC)
+# 和 lingtaios.spec 同一个布局判定，必须同步改：
+#   主源码  skills\brain-console\  → project-delivery 在**上一级**（兄弟目录）
+#   发布仓  repo\                  → project-delivery 在**同级**（发布时摊平了）
+# 写死 dirname(BC) 的话，从 clone 出来的仓里跑，20 件真源会全判「内容不同」——
+# 实测过，比对的根本是另一个目录。
+SKILLS = BC if os.path.isdir(os.path.join(BC, "project-delivery")) else os.path.dirname(BC)
 DN = subprocess.DEVNULL
 
 def sh(c):

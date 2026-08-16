@@ -53,7 +53,12 @@ if _FROZEN:
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLE = None
-    REPO = os.path.dirname(HERE)
+    # ⛔ 两种源码布局都要认（和 install.py / lingtaios.spec / tests 同一个判据）：
+    #     主源码  skills\brain-console\dashboard.py → project-delivery 在**上一级**
+    #     发布仓  repo\dashboard.py                 → 发布时摊平，在**同级**
+    # 无条件 dirname(HERE) 的话，从公开仓 clone 下来按 README 跑
+    # `python -X utf8 dashboard.py`，装配图/坑库/常驻薄核全部找不到。
+    REPO = HERE if os.path.isdir(os.path.join(HERE, "project-delivery")) else os.path.dirname(HERE)
 MAP = os.path.join(REPO, "project-delivery", "装配图.md")
 PITFALL = os.path.join(REPO, "project-delivery", "坑库.md")
 SITE = os.path.join(HERE, "site")

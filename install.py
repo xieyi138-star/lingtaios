@@ -8,7 +8,8 @@
     python -X utf8 install.py --check                  # 只自检不写任何东西
 
 行为:
-    1. 探测 python（>=3.8）与仓库根（脚本所在目录的上一级 = skills 仓库）
+    1. 探测 python（>=3.8）与仓库根（自动认两种布局：主源码 skills\\brain-console\\ 下，
+       或发布仓摊平后 install.py 与 project-delivery/ 同级）
     2. 自动探测机器根：NEXUS（存在 C:\\nexus_local 即用）、D（存在 D:\\ 即用）、HOME（用户主目录）
     3. 写 roots.json（machine_id + 各根）；roots.json 不随仓（gitignore）
     4. 写/补 ~/.claude/CLAUDE.md 启动器指针（存在则追加装配图行，不覆盖任何内容）
@@ -19,7 +20,16 @@ import json
 import os
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+# ⛔ 两种布局都要认，和 lingtaios.spec / tests/soul_manifest.py 用同一个判据：
+#     主源码  skills\brain-console\install.py → 方法层真源在**上一级**，驾驶舱在 brain-console\
+#     发布仓  repo\install.py                 → 发布时摊平，方法层真源和驾驶舱都在**同级**
+# 这里曾经无条件 dirname(dirname(__file__))，于是从公开仓 clone 下来跑
+# 「换电脑第一条命令」，12 项方法层真源全报 [XX]、退出码 1——文件明明都在，
+# 只是往上多找了一层。用户看到的是满屏红叉，等于系统装不上。实测复现过。
+_FLAT = os.path.isdir(os.path.join(HERE, "project-delivery"))
+REPO = HERE if _FLAT else os.path.dirname(HERE)
+BC = HERE if _FLAT else os.path.join(REPO, "brain-console")
 
 # 方法层真源（与 装配图.md §4 L1/L2 一致，装机自检用；改装配图时同步这里）
 METHOD_SOURCES = [
@@ -34,7 +44,6 @@ METHOD_SOURCES = [
     "project-delivery/scaffold/状态生成器.py",
     "project-delivery/scaffold/状态源.示例.json",
     "agent-worksheet/SKILL.md",
-    "brain-console/dashboard.py",
 ]
 
 LAUNCHER_LINES = [
@@ -67,6 +76,10 @@ def check(claude_dir, roots, out):
         exists = os.path.isfile(p)
         ok = ok and exists
         w(("  [OK] " if exists else "  [XX] ") + rel)
+    # 驾驶舱本体跟着布局走，不能写死 brain-console/ 这一层
+    dash = os.path.join(BC, "dashboard.py")
+    ok = ok and os.path.isfile(dash)
+    w(("  [OK] " if os.path.isfile(dash) else "  [XX] ") + dash)
     w("=== 自检：机器根（装配图别名） ===")
     for name, path in sorted(roots.items()):
         if path is None:
@@ -126,7 +139,7 @@ def main():
     if args.check:
         sys.exit(0 if check(claude_dir, roots, None) else 1)
 
-    roots_path = args.roots_file or os.path.join(REPO, "brain-console", "roots.json")
+    roots_path = args.roots_file or os.path.join(BC, "roots.json")
     with open(roots_path, "w", encoding="utf-8") as f:
         json.dump({"machine_id": machine_id, "roots": roots}, f, ensure_ascii=False, indent=2)
     print("[OK] roots.json 已写：%s" % roots_path)
@@ -158,7 +171,7 @@ def main():
     ok = check(claude_dir, roots, None)
     print("")
     if ok:
-        print("装好了。下一步：python -X utf8 %s" % os.path.join(REPO, "brain-console", "dashboard.py"))
+        print("装好了。下一步：python -X utf8 %s" % os.path.join(BC, "dashboard.py"))
     else:
         print("装机自检有红——按上面 [!!] 逐条修（缺根的可以留 null）。")
     sys.exit(0 if ok else 1)
