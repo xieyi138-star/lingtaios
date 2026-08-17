@@ -64,7 +64,7 @@
 
 **方式一：下载现成的（推荐，不用装 Python）**
 
-到 [Releases](https://github.com/xieyi138-star/lingtaios/releases) 下载
+到 [最新版下载页](https://github.com/xieyi138-star/lingtaios/releases/latest) 下载
 `lingtaios-vX.Y.Z-win64.zip`，解压到任意目录（**别放 `C:\Program Files` 或桌面临时目录**，
 它会在自己旁边写配置和记忆）。目前只有 Windows 64 位版。
 
