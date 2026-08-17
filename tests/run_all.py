@@ -30,6 +30,7 @@ PY = sys.executable
 
 # 会杀 8765 的常规脚本，按依赖顺序排（重的放前面，快的放后面）
 SUITE = [
+    "hooks_gate_test.py",        # L0 强制层：闸门坏了的两种样子都不吭声（全放行=等于没装／全拦截=用户当场卸掉）
     "repo_parity.py",            # 两仓一致性：不动服务，先跑掉
     "clone_smoke.py",            # 坑库 P23 的执行者：真 clone 一份从头走（验的是发布仓 HEAD）
     "persist_after_restart.py",  # 坑库 R4 的执行者：写入→重启进程→复查仍在

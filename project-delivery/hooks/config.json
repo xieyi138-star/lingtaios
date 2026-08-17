@@ -1,0 +1,131 @@
+{
+  "_readme": "L0 强制层的唯一判据源。gate.ps1 / gate.sh 都读这一份——判据只存一处，两个平台不许各写一份。",
+  "_why_text_lives_here": "PowerShell 5.1 读无 BOM 的 UTF-8 脚本会按 ANSI 解释，脚本里写中文必乱码。所以脚本保持纯 ASCII，中文一律从本文件按 UTF-8 读出来。这同时守住了「PowerShell 命令行不写中文」那条本机红线。",
+  "_why_keys_are_english": "key 是机器读的，脚本要能在纯 ASCII 里写出属性名；value 和 _ 开头的字段是人读的，用中文。",
+  "version": "1.0",
+
+  "master_switch": true,
+  "_master_switch": "设 false 全部闸门放行。⛔ 关闭时脚本必须出声（systemMessage 打到界面上）——静默失效的兜底比没有兜底更贵。",
+
+  "gates": {
+
+    "evidence": {
+      "enabled": true,
+      "rule_id": "R-L0-001",
+      "event": "Stop",
+      "_blocks": "回复第一行没有证据头",
+      "_prevents": "凭记忆陈述当前状态。红线是「确定感本身」——越确定越不查，而查过和没查过的话术长得一模一样，事后无法从文本分辨。",
+      "_retire_when": "当模型不再需要被提醒就 100% 先读后说时可删。判据取 traces：连续 30 天零触发，且期间抽查 5 次回复均有真实工具调用支撑。",
+
+      "first_line_must_match": ["^【证据】", "^【无证据】"],
+      "allow_empty": true,
+      "_allow_empty": "这一轮只调工具没出文本时 last_assistant_message 为空，那不是违规。",
+
+      "max_consecutive_blocks": 2,
+      "_max_consecutive_blocks": "Stop 退 2 会让模型继续写，写完又进这个闸。不设上限就是死循环，用户按不了停。达到上限强制放行并出声——放行本身必须被看见，否则就成了假绿。",
+
+      "block_reason": "【L0 闸门 R-L0-001】这段回复第一行没有证据头。\n\n常驻薄核要求每段回复第一行必须是：\n  【证据】<工具> <路径/参数> → <真实输出片段>\n或\n  【无证据】已查[列出查过哪些地方]均无 → 以下为推测\n\n现在重写这段回复，把第一行补上。\n⛔ 补的必须是这一轮真跑过的工具和真实输出片段——没跑过就先跑。\n不许为了过闸而编一个证据头：编出来的证据头比没有证据头更贵，它让「没查」变得看不见。",
+
+      "release_notice": "【L0 闸门 R-L0-001】已连续拦截 {count} 次仍未打证据头，本轮强制放行。\n这一轮的状态类陈述没有经过实证闸——按未经核实处理。"
+    },
+
+    "redline": {
+      "enabled": true,
+      "rule_id": "R-L0-002",
+      "event": "Stop",
+      "_blocks": "红线短语（不拦，只记账并提示）",
+      "_prevents": "用模糊限定词把推测包装成陈述。这类词出现时，说话人自己通常知道没查——它是没实证的语言指纹。",
+      "_retire_when": "traces 里这条连续 30 天只有误报（命中的都是引用他人原话或在讨论这些词本身）时改判据或删。",
+      "_why_warn_only": "这些词在正常技术描述里也合法出现（「这个函数看起来是递归的」）。硬拦会逼出规避性改写——把词换掉而不是把状态查掉，那是更坏的结果：指纹没了，病还在。所以只记账+出声，让人自己看 traces 里的比例。",
+
+      "phrases": ["应该是", "大概是", "按惯例", "通常", "我记得", "印象中", "看起来", "差不多", "估计是"],
+      "notice": "【L0 R-L0-002】本轮命中红线短语：{hits}。已记入 traces，未拦截。"
+    },
+
+    "rollback": {
+      "enabled": true,
+      "rule_id": "R-L0-003",
+      "event": "PreToolUse",
+      "match_tools": ["Write", "Edit", "NotebookEdit"],
+      "_blocks": "改核心真源，而该文件不在任何 git 仓库下",
+      "_prevents": "薄核红线「任何重组/清理/批量修改之前，先确认有回滚点」。不在 git 下的核心真源，改错了没有任何还原路径。",
+      "_retire_when": "所有核心真源都进了 git 且不可能被移出时可删。",
+
+      "protected_keywords": [
+        "project-delivery",
+        "agent-worksheet",
+        "常驻薄核",
+        "装配图",
+        "坑库",
+        "项目交付法",
+        "核心大脑",
+        "道法术",
+        "00_宪法",
+        "01_法典",
+        "规则台账",
+        "关口清单"
+      ],
+      "_protected_keywords": "对目标路径做子串匹配（大小写不敏感）。宁可多命中——命中后只是去查一次 git，有仓就放行，代价极小。",
+
+      "block_reason": "【L0 闸门 R-L0-003】要改的是核心真源，而它不在任何 git 仓库下：\n  {path}\n\n改错了没有回滚点。先做下面任一件再改：\n  1. 把它所在目录纳入 git（git init + 首次 commit 作为基线）\n  2. 或先复制一份带时间戳的备份，并在回复里说明备份落在哪\n\n⛔ 别绕开这条去用 Bash 写同一个文件——那样只是躲开了闸，回滚点还是没有。"
+    },
+
+    "danger": {
+      "enabled": true,
+      "rule_id": "R-L0-004",
+      "event": "PreToolUse",
+      "match_tools": ["Bash", "PowerShell"],
+      "_blocks": "不可逆的批量删除/回退/强推",
+      "_prevents": "同 R-L0-003，但走的是命令行这条路。只堵 Write/Edit 不堵 Bash，等于只锁了前门。",
+      "_retire_when": "不删——这类命令的代价不可逆，而失败面无限。真觉得吵就调 danger_patterns，不要关。",
+
+      "danger_patterns": [
+        "rm\\s+(-[a-zA-Z]*\\s+)*-[a-zA-Z]*r[a-zA-Z]*f",
+        "rm\\s+(-[a-zA-Z]*\\s+)*-[a-zA-Z]*f[a-zA-Z]*r",
+        "git\\s+reset\\s+--hard",
+        "git\\s+clean\\s+-[a-zA-Z]*f",
+        "git\\s+push\\s+[^|;]*--force(?!-with-lease)",
+        "git\\s+push\\s+[^|;]*\\s-f(\\s|$)",
+        "git\\s+checkout\\s+--\\s+\\.",
+        "Remove-Item[^|;]*-Recurse[^|;]*-Force",
+        "Remove-Item[^|;]*-Force[^|;]*-Recurse",
+        "rmdir\\s+/s",
+        "del\\s+/[sfq]",
+        "DROP\\s+(TABLE|DATABASE)",
+        "TRUNCATE\\s+TABLE",
+        "mkfs",
+        ">\\s*/dev/sd"
+      ],
+      "_force_with_lease": "--force-with-lease 特意排除：它在别人推过东西时会自己失败，本身就是回滚点意识的体现。",
+
+      "block_reason": "【L0 闸门 R-L0-004】这条命令不可逆：\n  {command}\n\n命中模式：{pattern}\n\n执行前先回答一句：它做坏了，你拿什么还原？\n  · 答得出（有 commit / 有备份 / 目标是可重建的生成物）→ 在回复里写出来，然后重发同一条命令，闸门放行第二次\n  · 答不出 → 换一个可逆的做法\n\n⛔ 这个闸不给静默开关。真嫌吵就去 hooks/config.json 改 danger_patterns——改动会留在 git 里，比在脑子里决定「这次算了」可追溯。",
+
+      "second_try_passes": true,
+      "_second_try_passes": "同一 session 内同一条命令第二次出现时放行：第一次拦下是为了让人先说出回滚路径，不是为了禁止这类操作。⛔ 放行也记账，traces 里看得到「拦了但被确认执行」。"
+    },
+
+    "session_start": {
+      "enabled": true,
+      "rule_id": "R-L0-005",
+      "event": "SessionStart",
+      "_blocks": "什么都不拦，只注入",
+      "_prevents": "开窗第一个动作是回忆而不是读真实状态。薄核开窗五步写在文件里，但没有任何东西保证它被执行。",
+      "_retire_when": "开窗五步成为稳定习惯（连续 20 个新窗首个动作都是读工具）后可删。",
+
+      "inject": "【L0 · 开窗五步】本机装了强制层：规则不只写在文件里，有闸门在模型之外拦。\n\n开窗顺序（第一个动作是读真实状态，不是回忆）：\n  ① 打证据头 → ② 读项目法典/准则 → ③ 跑状态生成器拿真值，不读人写的完成度表\n  ④ 对齐最近记录 → ⑤ 观象一句话：时位（该潜还是该飞）+ 向果（服务哪一条）\n\n导航真源（找任何知识先读它，别满盘 grep）：{map}\n常驻规则：{core}\nL0 闸门说明与关闭方式：{readme}\n\n生效中的闸：{active}"
+    }
+  },
+
+  "paths": {
+    "_readme": "相对 {SKILLS} 根的真源位置。写在这里而不是脚本里，是因为脚本必须保持纯 ASCII，拼不出中文文件名。改真源位置时先改装配图，再改这里。",
+    "map": "project-delivery/装配图.md",
+    "core": "project-delivery/常驻薄核.md"
+  },
+
+  "traces": {
+    "enabled": true,
+    "dir": "traces",
+    "_readme": "按天一个 JSONL。这是 scaffold/规则台账.md 里「触发过几次」和「哪条真的拦住过一次事故」两栏的唯一真值来源——在有它之前那两栏在物理上永远填不了数，而「从未触发过」正是那份台账自己写的删除判据。",
+    "retain_days": 90
+  }
+}

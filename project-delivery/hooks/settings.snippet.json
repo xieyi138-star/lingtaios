@@ -1,0 +1,66 @@
+{
+  "_readme": "把下面 hooks 这一段粘进你的 ~/.claude/settings.json 顶层（与 permissions 平级）。这是样板，不是活配置——活的那份在每台机器自己的 settings.json 里。",
+
+  "_换机器要改什么": "只有 args 里那条绝对路径。改成你自己的 <skills根>/project-delivery/hooks/gate.ps1。hook 的 command 字段不做环境变量展开，${CLAUDE_PROJECT_DIR} 又指向当前项目而不是 skills 仓，所以这里只能写绝对路径。这也是为什么判据逻辑一个字都不放在 settings.json 里——它是本机配置，没有版本，换台机器就没了。",
+
+  "_macOS_Linux": "把 command 换成 \"bash\"、args 换成 [\"<skills根>/project-delivery/hooks/gate.sh\"]。判据两边共用同一份 config.json，不会分叉。",
+
+  "_为什么 PreToolUse 的 matcher 不写 *": "写 * 等于每一次工具调用都启一个 PowerShell 进程（约 200-300ms）。只挂真正需要判的五个工具，读文件、搜索这些高频只读操作一次都不进闸。",
+
+  "_怎么临时关": "改 hooks/config.json 的 master_switch 为 false。⛔ 关掉后每次回复会打一行提示——这是故意的，静默失效的闸门比没有闸门更贵：你会以为它在守着。",
+
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy", "Bypass",
+              "-File", "C:\\Users\\Administrator\\.claude\\skills\\project-delivery\\hooks\\gate.ps1"
+            ],
+            "timeout": 20,
+            "statusMessage": "L0 开窗注入"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy", "Bypass",
+              "-File", "C:\\Users\\Administrator\\.claude\\skills\\project-delivery\\hooks\\gate.ps1"
+            ],
+            "timeout": 20,
+            "statusMessage": "L0 证据头闸"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy", "Bypass",
+              "-File", "C:\\Users\\Administrator\\.claude\\skills\\project-delivery\\hooks\\gate.ps1"
+            ],
+            "timeout": 20,
+            "statusMessage": "L0 回滚点闸"
+          }
+        ]
+      }
+    ]
+  }
+}

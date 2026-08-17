@@ -1,0 +1,11 @@
+# ⛔ shell 脚本必须以 LF 存、以 LF 检出。
+#
+# 本机 core.autocrlf=true，checkout 时会把 LF 换成 CRLF。对 .py/.md 无所谓，
+# 对 .sh 是致命的：`#!/usr/bin/env bash\r` 在 Linux 上报的是
+#   bad interpreter: /usr/bin/env bash^M: No such file or directory
+# 这条错误信息里没有「行尾符」四个字，而且它只在**别人的机器上**出现——
+# 作者这边永远复现不了。L0 的 gate.sh 是给 macOS/Linux 用户跑的，
+# 正是最容易被这一条咬到的文件。
+*.sh text eol=lf
+
+# 同理：给 POSIX 侧用的无扩展名脚本如果以后有，也照此办理。
