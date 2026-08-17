@@ -46,6 +46,7 @@ SUITE = [
     "seed_upgrade.py",           # 出厂文件：该升的升，用户改过的一个字都不许动
     "pit_loss_alarm.py",         # 经验库悄悄变少了必须出声（手改改坏了表格是常态）
     "auto_regen_stale.py",       # 状态旧了扫描时自己重算：新窗口接手不许脱节
+    "atomic_write_test.py",      # 写失败时原文件必须原样还在（open "w" 会先截断）
     "no_pollute_test.py",
     "workspace_e2e.py",
     "finder_e2e.py",

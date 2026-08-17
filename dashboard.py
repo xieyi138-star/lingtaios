@@ -114,6 +114,38 @@ ORGANS = ["00_宪法.md", "01_法典.md", "02_状态.md", "03_在建.md", "04_�
 ALIASES = {"SKILLS", "NEXUS", "D", "HOME"}
 
 
+def _atomic_write(path, text):
+    """写文件：先写同目录临时文件，成功了再原子替换。
+
+    ⛔ `open(path, "w")` 是**先把原文件截断成 0，再往里写**。中间但凡出一点事
+       ——编码错、磁盘满、断电、进程被杀——原文件就没了，而且看起来像什么都没发生。
+       实测：一次写 dashboard.py 时字符串里混进了游离代理对，编码抛异常，
+       127548 字节的文件当场变成 0 字节（靠 git 才捞回来）。
+       用户的坑库、roots.json 没有 git 兜着——「记忆归你」这条承诺，
+       第一步是**别把它写没了**。
+       os.replace 在同一分区上是原子的：要么还是旧的，要么已经是新的，没有中间态。
+    """
+    tmp = path + ".tmp"
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    try:
+        with io.open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # ⛔ 失败了得把 .tmp 收拾掉再往外抛。第一版没收拾，回归当场抓到——
+        #    原文件是保住了，但会在用户目录里一次次堆下半截垃圾文件，
+        #    而下一个人看见 `坑库.md.tmp` 只会猜它是什么、敢不敢删。
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def load_roots(path=None):
     p = path or ACTIVE_ROOTS_FILE
     if not os.path.isfile(p):
@@ -202,8 +234,7 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
         "| 指标 | 定义 | 谁来测 | 何时测 | 达标线 |\n|---|---|---|---|---|\n| | | | | |",
         goal_block)
     const = const.replace("🔴 \n🔴 ", red_block + "\n")
-    with io.open(const_path, "w", encoding="utf-8") as f:
-        f.write(const)
+    _atomic_write(const_path, const)
 
     # 填 01 法典
     codex_path = os.path.join(brain, "01_法典.md")
@@ -216,8 +247,7 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
     codex = codex.replace("- **当前阶段目标**：<这一阶段要拿到什么>", "- **当前阶段目标**：见 `03_在建.md` 注-001")
     codex = codex.replace("- **真源指定**：道=<...> 法=<...> 术=<...> 关键数字=<...>",
                           "- **真源指定**：道=项目交付法 法=核心大脑六器官 术=坑库（`~/.claude/skills/project-delivery/`，开工前查装配图）")
-    with io.open(codex_path, "w", encoding="utf-8") as f:
-        f.write(codex)
+    _atomic_write(codex_path, codex)
 
     # 填 03 在建
     plan_path = os.path.join(brain, "03_在建.md")
@@ -226,8 +256,7 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
     plan = plan.replace("### 注-001 · <一句话名字>",
                         "### 注-001 · %s" % ("续做（一键装系统）" if retro else "立项：" + name))
     plan = plan.replace("| **服务哪个终极指标** | <说不出就不开工> |", "| **服务哪个终极指标** | 见 `00_宪法.md` 一 · 终极之果 |")
-    with io.open(plan_path, "w", encoding="utf-8") as f:
-        f.write(plan)
+    _atomic_write(plan_path, plan)
 
     # 填 05 交接（续装项目：进度接历史 HANDOFF/施工图，不复制内容）
     hand_p = os.path.join(brain, "05_交接.md")
@@ -241,8 +270,7 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
     else:
         hand = hand.replace("见 `03_在建.md`。一句话：<...>",
                             "见 `03_在建.md`。一句话：新项目立项，从果五栏开工。")
-    with io.open(hand_p, "w", encoding="utf-8") as f:
-        f.write(hand)
+    _atomic_write(hand_p, hand)
 
     # 通用 状态源.json
     state_src = {
@@ -256,8 +284,7 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
         "health": [],
         "outcomes": [],
     }
-    with io.open(os.path.join(brain, "状态源.json"), "w", encoding="utf-8") as f:
-        json.dump(state_src, f, ensure_ascii=False, indent=2)
+    _atomic_write(os.path.join(brain, "状态源.json"), json.dumps(state_src, ensure_ascii=False, indent=2))
     return brain
 
 
@@ -404,8 +431,7 @@ def api_add_pitfall(data):
                 if lines[i].startswith("## ")), len(lines))
     insert_at = max(i for i in range(sec_idx, nxt) if lines[i].startswith("| "))
     lines.insert(insert_at + 1, new_row)
-    with io.open(PITFALL, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    _atomic_write(PITFALL, "\n".join(lines))
     try:
         build(load_roots(), ACTIVE_SITE)
     except Exception:
@@ -428,8 +454,7 @@ def api_audit_delete(data):
         removed = len(lines) - len(keep)
         if not removed:
             return 400, {"ok": False, "error": "没有匹配的行被删（编号不对？）"}
-        with io.open(PITFALL, "w", encoding="utf-8") as f:
-            f.write("\n".join(keep))
+        _atomic_write(PITFALL, "\n".join(keep))
         # 走界面退休的是**有意**减少：把基线跟着降下去，别让 _pit_loss 误报。
         # 手改文件导致的减少没有这一步，所以照样会被抓出来。
         try:
@@ -454,8 +479,7 @@ def api_audit_delete(data):
         keep = [ln for ln in lines
                 if not any(re.match(r"^\| %s \|" % re.escape(i), ln) for i in ids)]
         removed = len(lines) - len(keep)
-        with io.open(todo_p, "w", encoding="utf-8") as f:
-            f.write("\n".join(keep))
+        _atomic_write(todo_p, "\n".join(keep))
         try:
             build(load_roots(), ACTIVE_SITE)
         except Exception:
@@ -635,8 +659,7 @@ def _register_in_map(section_marker, new_row):
     insert_at = max(i for i in range(sec_idx, nxt) if lines[i].startswith("|"))
     if new_row not in lines:
         lines.insert(insert_at + 1, new_row)
-        with io.open(target, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+        _atomic_write(target, "\n".join(lines))
 
 
 # ── 首跑向导：让用户指自己的目录，而不是猜 ─────────────────────
@@ -700,8 +723,7 @@ def api_setup_save(data):
     }
     try:
         with _CONF_LOCK:
-            with io.open(ACTIVE_ROOTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+            _atomic_write(ACTIVE_ROOTS_FILE, json.dumps(payload, ensure_ascii=False, indent=2))
     except OSError as e:
         return 500, {"ok": False, "error": "写 roots.json 失败：%s" % e}
     data2 = build(load_roots(), ACTIVE_SITE)  # 立即重算，用户点完就能看到自己的项目
@@ -799,8 +821,7 @@ def _load_conf():
 
 
 def _save_conf(conf):
-    with io.open(ACTIVE_ROOTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(conf, f, ensure_ascii=False, indent=2)
+    _atomic_write(ACTIVE_ROOTS_FILE, json.dumps(conf, ensure_ascii=False, indent=2))
 
 
 def api_project_add(data):
@@ -1450,8 +1471,7 @@ def _pit_loss(now, out_dir=None):
             d = os.path.dirname(p)
             if d and not os.path.isdir(d):
                 os.makedirs(d)
-            with io.open(p, "w", encoding="utf-8") as f:
-                json.dump({"count": now, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+            _atomic_write(p, json.dumps({"count": now, "at": time.strftime("%Y-%m-%d %H:%M:%S")}))
         except OSError:
             pass
         return None
@@ -1465,8 +1485,7 @@ def _pit_baseline_set(now):
         d = os.path.dirname(p)
         if d and not os.path.isdir(d):
             os.makedirs(d)
-        with io.open(p, "w", encoding="utf-8") as f:
-            json.dump({"count": now, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+        _atomic_write(p, json.dumps({"count": now, "at": time.strftime("%Y-%m-%d %H:%M:%S")}))
     except OSError:
         pass
 
@@ -2156,8 +2175,7 @@ def build(roots, out_dir):
     if out_dir:
         if not os.path.isdir(out_dir):
             os.makedirs(out_dir)
-        with io.open(os.path.join(out_dir, "data.json"), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
+        _atomic_write(os.path.join(out_dir, "data.json"), json.dumps(data, ensure_ascii=False, indent=1))
     return data
 
 
@@ -2437,10 +2455,9 @@ def _seed_repo():
                     # 兜底必须出声：落不下去就等于又回到「记了会丢」，不许静默
                     print("[!!] 出厂真源落盘失败 %s：%s" % (fn, e))
     try:
-        with io.open(SEED_MANIFEST, "w", encoding="utf-8") as f:
-            json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "version": _read_version(),
-                       "files": known, "kept": kept},
-                      f, ensure_ascii=False, indent=2)
+        _atomic_write(SEED_MANIFEST, json.dumps(
+            {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "version": _read_version(),
+             "files": known, "kept": kept}, ensure_ascii=False, indent=2))
     except OSError as e:
         print("[!!] 写不了升级台账 %s：%s（下次启动会当成老装机处理）" % (SEED_MANIFEST, e))
     if landed:
@@ -2487,9 +2504,9 @@ def main():
             # 仍然先写一份自动探测结果：服务照常起得来，向导只是「确认并调整」，
             # 不是「从零配置」——启动路径一行没动，零风险。
             # 老的 roots.json 没有这个字段，load_roots 缺省当 true，不打扰现有用户。
-            with io.open(ROOTS_FILE, "w", encoding="utf-8") as f:
-                json.dump({"machine_id": machine_id, "roots": roots, "setup_done": False},
-                          f, ensure_ascii=False, indent=2)
+            _atomic_write(ROOTS_FILE, json.dumps(
+                {"machine_id": machine_id, "roots": roots, "setup_done": False},
+                ensure_ascii=False, indent=2))
 
     # ⛔ 这个入口不是锦上添花，是补一个断掉的闭环。
     #    「继续做」指令让 AI 收工时跑 `python -X utf8 状态生成器.py`，

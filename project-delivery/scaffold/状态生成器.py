@@ -150,6 +150,31 @@ PROBES = {
 
 # ── 主流程 ────────────────────────────────────────────────
 
+def atomic_write(path, text):
+    """先写同目录临时文件，成功了再原子替换。
+
+    ⛔ `open(path, "w")` 是**先把原文件截断成 0，再往里写**。中途出任何事
+       （编码错、磁盘满、断电、进程被杀）原文件就没了，而且看起来像什么都没发生。
+       02_状态 虽然能重算，但同一个毛病不该在这套东西里留两套写法——
+       这个文件会被复制进用户的每一个项目，写坏一次就是坏一次。
+       os.replace 在同分区上是原子的：要么旧的，要么新的，没有中间态。
+    """
+    tmp = path + ".tmp"
+    try:
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # 失败了把半截的 .tmp 收拾掉再往外抛，别在用户项目里堆垃圾
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def run(conf, root, high_water=None):
     """high_water：上一次跑出来的历史最高值（从 02_状态.json 读），给 ratchet 探针用。"""
     high_water = high_water or {}
@@ -332,10 +357,10 @@ def main():
             v = vals.get(spec["name"])
             if isinstance(v, int):
                 hw[spec["name"]] = max(v, prev_hw.get(spec["name"], v))
-        io.open(out_md, "w", encoding="utf-8").write(md)
-        io.open(out_json, "w", encoding="utf-8").write(
-            json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "values": vals,
-                        "alarms": alarms, "high_water": hw}, ensure_ascii=False, indent=2))
+        atomic_write(out_md, md)
+        atomic_write(out_json, json.dumps(
+            {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "values": vals,
+             "alarms": alarms, "high_water": hw}, ensure_ascii=False, indent=2))
         print(u"written: %s" % out_md)
     for a in alarms:
         print(u"ALARM: " + a)
