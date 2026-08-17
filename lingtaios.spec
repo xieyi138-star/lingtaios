@@ -42,6 +42,17 @@ def _imports_of(py):
 HIDDEN = sorted(set(['mdlite']) | set(_imports_of(GEN)))
 print('[spec] generator deps folded into hiddenimports -> %s' % HIDDEN)
 
+# 版本号进包：界面右上角那个徽章从此读它，不再在 index.html 里存第二份。
+# 「一份知识只能存一处，第二处必须由第一处生成」——此前版本号手写在三处，
+# 靠 make_release 的一致性检查兜着，而检查只能拦住不一致，拦不住「三处一起忘」。
+# 两种布局都要认（主源码在 release\ 下，发布仓摊平后在根）。
+VER = _os.path.join(BC, 'release', 'VERSION')
+if not _os.path.isfile(VER):
+    VER = _os.path.join(BC, 'VERSION')
+if not _os.path.isfile(VER):
+    raise SystemExit('[spec] 找不到 VERSION：%s' % VER)
+print('[spec] VERSION -> %s' % VER)
+
 # 不许再把 BC 整个目录打进来。它含 dist/（上一代 exe）和 build/（中间产物），
 # 每打一次就把上一代 exe 套进去一次：568MB 里有 508MB 是这么来的，
 # 而 dashboard.py 对 'brain-console' 这个 bundle 子目录零引用。
@@ -57,6 +68,7 @@ a = Analysis(
         (_os.path.join(SKILLS, 'agent-worksheet'), 'agent-worksheet'),
         (_os.path.join(BC, 'AI\u5f00\u7a97\u5fc5\u8bfb.md'), '.'),
         (_os.path.join(BC, 'roots.example.json'), '.'),
+        (VER, '.'),
     ],
     hiddenimports=HIDDEN,
     hookspath=[],

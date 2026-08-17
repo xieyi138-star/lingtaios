@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """确认改动真的进了 exe（改的是打包进去的那份 web/，不是本地文件）"""
-import json, os, shutil, socket, subprocess, tempfile, time, urllib.request
+import json, os, re, shutil, socket, subprocess, tempfile, time, urllib.request
 BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tests 的上一级就是 brain-console
-# release_pkg 是作者本机的发布目录，别人 clone 下来只有自己打出来的 dist——两个都认，
-# 谁在就用谁，否则这行在别人机器上直接 FileNotFoundError。首选保持原样，不改语义。
-_CAND = [os.path.join(BC, d, "lingtaios.exe") for d in ("release_pkg", "dist")]
+# release_pkg 是作者本机的发布目录，别人 clone 下来只有自己打出来的 dist——两个都认。
+# ⛔ 顺序必须 dist 优先，跟 run_all._exe() 和 soul_manifest 一致：整套回归起的、验的
+#    都是 dist 那个 exe，这里若去验 release_pkg 那个，同一轮回归测的就是两个不同的
+#    二进制；而且 release_pkg 停在上次打包，改一行源码这条就红到下次发版为止。
+_CAND = [os.path.join(BC, d, "lingtaios.exe") for d in ("dist", "release_pkg")]
 EXE = next((p for p in _CAND if os.path.isfile(p)), _CAND[0])
 DN = subprocess.DEVNULL
 
@@ -40,8 +42,13 @@ checks = [
     # 这条验的是版本号的**位置**（跟在 LingTai OS 后面、不再单独一行），不是它的值。
     # 原来写死 v0.1.1，一升版就假红——等于把版本号又抄了一份（P10：同一数字抄多份必分叉）。
     # 「三处版本号一致」由 make_release.py 的发布闸负责，这里不重复。
-    ("版本号跟在 LingTai OS 后面（不再单独一行）",
-     'LingTai OS<i class="ver">v' in html and 'class="brand-ver"' not in html),
+    # ⛔ 断言里也不许残留 `>v`：那等于仍然假设版本号**写在 html 里**。现在徽章由
+    #    app.js 从 data.json 填（VERSION 是唯一真源），html 里那个槽是空的。
+    ("版本号槽位跟在 LingTai OS 后面（不再单独一行）",
+     'LingTai OS<i class="ver"' in html and 'class="brand-ver"' not in html),
+    # 反向断言：html 里不许再出现字面版本号，否则又变回第二份真源
+    ("版本号不写死在 html 里（由 data.json 填）",
+     not re.search(r'class="ver"[^>]*>\s*v?\d+\.\d+\.\d+', html) and 'id="ver-badge"' in html),
     ("Logo = 2 号（星＋三级台阶）", html.count('<rect x="8.4"') == 1 and 'cx="12" cy="4.6"' in html),
     ("Logo 用亮色渐变变量", "--logo-a" in css and "#ff6b4a" in css),
     ("浅色主题有单独的压暗版", "#e2542f" in css),

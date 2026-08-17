@@ -43,6 +43,7 @@ SUITE = [
     "project_mgmt_stress.py",
     "exe_mgmt_check.py",
     "exe_no_python_dep.py",      # 打包态发给用户的指令里不许出现他可能没有的 python 命令
+    "seed_upgrade.py",           # 出厂文件：该升的升，用户改过的一个字都不许动
     "no_pollute_test.py",
     "workspace_e2e.py",
     "finder_e2e.py",

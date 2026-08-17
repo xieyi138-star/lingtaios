@@ -72,6 +72,27 @@ MAP = os.path.join(REPO, "project-delivery", "装配图.md")
 PITFALL = os.path.join(REPO, "project-delivery", "坑库.md")
 SITE = os.path.join(HERE, "site")
 WEB = os.path.join(BUNDLE, "web") if BUNDLE else os.path.join(HERE, "web")
+
+
+def _read_version():
+    """版本号只有一份真源：release/VERSION（发布仓摊平后在根；打包后在 BUNDLE 根）。
+
+    ⛔ 别在 index.html / README 里再各存一份。此前正是三处手写，靠 make_release
+       的「版本号三处一致」检查兜着——而检查只拦得住**不一致**，拦不住
+       **三处一起忘**，那时它照样绿着放行一个版本号全是旧值的包。
+       「一份知识只能存一处，第二处必须由第一处生成。」
+    """
+    cands = ([os.path.join(BUNDLE, "VERSION")] if BUNDLE else []) + [
+        os.path.join(HERE, "release", "VERSION"), os.path.join(HERE, "VERSION")]
+    for p in cands:
+        try:
+            with io.open(p, encoding="utf-8-sig") as f:
+                v = f.read().strip()
+        except OSError:
+            continue
+        if v:
+            return v
+    return ""
 ROOTS_FILE = os.path.join(HERE, "roots.json")
 # --roots-file 是「演练/多机配置」用的。它以前只在启动时读一次，写回的却永远是
 # ROOTS_FILE——演练一跑就污染真配置（实测把两个临时目录写进了本机 roots.json）。
@@ -554,6 +575,9 @@ def evolution_data(projects, pit_rows, health):
         "identical_pairs": health["identical_pairs"],
         "new_this_week": new_this_week,
         "total_pitfalls": len(pit_rows),
+        # 升级传播：新版带来的方法论更新里，哪些没能自动生效、为什么（见 _seed_repo）
+        "seed_kept": (_seed_state().get("kept") or []),
+        "seed_pending": (_seed_state().get("pending") or []),
     }
 
 
@@ -1428,6 +1452,51 @@ def api_sync_project(data):
     return 200, {"ok": True, "synced": n}
 
 
+def api_apply_seed_update(data):
+    """把「认不出来历」的出厂文件换成新版。⛔ 覆盖前一律先留 .bak。
+
+    只处理 _seed_repo 记在 pending 里的那些（v0.2.0 及更早装的，台账里没有）。
+    用户明确改过的（kept）不在这里，也不给入口——那条红线不给开关。
+    """
+    if not BUNDLE:
+        return 400, {"ok": False, "error": "源码态没有出厂副本可换"}
+    want = [k for k in (data.get("files") or []) if isinstance(k, str)]
+    if not want:
+        return 400, {"ok": False, "error": "没选任何文件"}
+    state = _seed_state()
+    allowed = set(state.get("pending") or [])
+    bad = [k for k in want if k not in allowed]
+    if bad:
+        return 400, {"ok": False, "error": "这些不在待定清单里，不许动：%s" % "、".join(bad[:5])}
+    known = dict(state.get("files") or {})
+    done, failed = [], []
+    for key in want:
+        src = os.path.join(BUNDLE, key.replace("/", os.sep))
+        dst = os.path.join(REPO, key.replace("/", os.sep))
+        if not os.path.isfile(src) or not os.path.isfile(dst):
+            failed.append(key)
+            continue
+        try:
+            shutil.copyfile(dst, dst + ".bak")   # 先留退路，再覆盖
+            shutil.copyfile(src, dst)
+            known[key] = _md5(dst)
+            done.append(key)
+        except OSError:
+            failed.append(key)
+    state["files"] = known
+    state["pending"] = [k for k in (state.get("pending") or []) if k not in done]
+    try:
+        with io.open(SEED_MANIFEST, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        return 500, {"ok": False, "error": "台账写不了：%s" % e}
+    try:
+        build(load_roots(), ACTIVE_SITE)
+    except Exception:
+        pass
+    return 200, {"ok": True, "updated": done, "failed": failed}
+
+
 def api_run_generator(data):
     path = (data.get("path") or "").strip()
     if not path or not os.path.isdir(path):
@@ -1490,11 +1559,17 @@ def api_project_detail(data):
                 notes.append(title)
     detail["notes"] = notes
     detail["handoff_done"] = ""
+    detail["handoff_blank"] = False
     hand_p = os.path.join(brain, "05_交接.md")
     if os.path.isfile(hand_p):
         t = _read_md(hand_p) or ""
         m = re.search(r"## 本窗做完的 / 没做完的(.*?)(?=\n## |\Z)", t, re.S)
         if m:
+            # ⛔ 刚建好的项目，这一段还是出厂模板：「做完：<...>」「熔断了吗：<到期没做
+            #    完的注…>」。原样渲染出来，它长得**像内容**——陌生人第一次点进自己刚建的
+            #    项目，看到的是一屏尖括号，第一反应是"这东西坏了/我漏填了什么"。
+            #    模板占位符是给填的人看的提示，不是状态。认出来就别当状态展示。
+            detail["handoff_blank"] = "<...>" in m.group(1)
             detail["handoff_done"] = mdlite.render(m.group(1))
 
     # 根级 md 只列名不渲染（旧项目文档内容不可预知，守"涉密不渲染"红线）
@@ -1506,11 +1581,22 @@ def api_project_detail(data):
 
     # 告警
     alarms = []
+    detail["state_at"], detail["state_age_days"] = "", None
     sj = os.path.join(brain, "02_状态.json")
     if os.path.isfile(sj):
         try:
             with io.open(sj, encoding="utf-8") as f:
-                alarms = json.load(f).get("alarms", [])
+                _sd = json.load(f)
+            alarms = _sd.get("alarms", [])
+            detail["state_at"] = _sd.get("at", "")
+            # 详情页也要知道这份状态多老——见 discover_projects 里那段注释：
+            # 旧快照报平安，比没有状态更危险。
+            if detail["state_at"]:
+                try:
+                    detail["state_age_days"] = int((time.time() - time.mktime(
+                        time.strptime(detail["state_at"], "%Y-%m-%d %H:%M:%S"))) // 86400)
+                except ValueError:
+                    pass
         except (ValueError, OSError):
             alarms = ["02_状态.json 解析失败"]
     detail["alarms"] = alarms
@@ -1862,6 +1948,19 @@ def discover_projects(roots, sources):
                 state = "bad_json"
         elif os.path.isfile(os.path.join(p, "brain", "状态源.json")):
             state = "not_run"
+        # ⛔ 「状态已生成」是个不带时间的说法，一年前生成的和刚生成的长得一模一样。
+        #    实测代价：本项目自己的 02_状态.md 停在 2026-08-16 03:52，写着
+        #    「坑库 38 条 ✅ 无告警」，而真源当时已经 80 条——驾驶舱顶着一份
+        #    28 小时前的旧快照报平安，漂了 42 条没有任何东西出声。
+        #    根因是那时没有重算入口（界面没有，文档给的办法要 Python）。
+        #    入口补上了还不够：**没人告诉你该按**，按钮就等于不存在。
+        age_days = None
+        if at:
+            try:
+                age_days = int((time.time() - time.mktime(
+                    time.strptime(at, "%Y-%m-%d %H:%M:%S"))) // 86400)
+            except ValueError:
+                age_days = None
         handoff = os.path.join(p, "HANDOFF.md")
         projects.append({
             "name": os.path.basename(p),
@@ -1870,6 +1969,7 @@ def discover_projects(roots, sources):
             "alarms": alarms,
             "state": state,
             "state_at": at,
+            "state_age_days": age_days,
             "handoff_mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(handoff))) if os.path.isfile(handoff) else "",
         })
     projects.sort(key=lambda x: x["name"])
@@ -1915,6 +2015,7 @@ def build(roots, out_dir):
 
     data = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "version": _read_version(),
         "machine_id": roots.get("machine_id", ""),
         "first_run": not roots.get("_setup_done", True),
         # 向导勾过、现在够不着的项目（外接盘拔了/网络盘断了/目录挪了）——要显示，不许静默
@@ -1988,6 +2089,7 @@ def serve(open_browser):
                 "/api/templates": lambda: (200, api_templates()),
                 "/api/create_project": lambda: api_create_project(data),
                 "/api/run_generator": lambda: api_run_generator(data),
+                "/api/apply_seed_update": lambda: api_apply_seed_update(data),
                 "/api/project_detail": lambda: api_project_detail(data),
                 "/api/open_dir": lambda: api_open_dir(data),
                 "/api/install_organs": lambda: api_install_organs(data),
@@ -2105,20 +2207,42 @@ def _sweep_stale_unpack():
         pass                  # 清垃圾失败绝不能影响启动
 
 
+SEED_MANIFEST = os.path.join(REPO, ".seeded.json")
+
+
+def _seed_state():
+    try:
+        with io.open(SEED_MANIFEST, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _seed_repo():
-    """exe 首跑：把出厂的方法论真源从只读的 BUNDLE 落到 exe 旁边（REPO = HERE）。
+    """exe 启动：把出厂的方法论真源从只读的 BUNDLE 落到 exe 旁边（REPO = HERE）。
 
     落盘之后，坑库/装配图/常驻薄核等的读写都走这份持久副本——那是**用户的资产**，
     必须活过进程退出。以前 REPO 直接指 BUNDLE（临时解压目录），记进去的坑重启就没。
 
-    ⛔ 逐文件「不存在才复制」，绝不覆盖已有的：用户记的坑、改过的装配图都在这些
-       文件里，升级 exe 不许把它们冲掉。
-    ⛔ 代价要说出来：正因为不覆盖，**新版 exe 带的方法论更新也不会自动生效**。
-       这是有意的取舍（宁可旧，不可丢），差异的传播走界面上的「同步通用件」。
+    ⛔ 绝不覆盖用户改过的内容。这条不给任何开关。
+
+    以前的实现是「不存在才复制」，代价是**新版带的方法论更新永远不会生效**——
+    升级传播机制一直空着（HANDOFF item 6）。而「不存在才复制」之所以必要，
+    只是因为**分不清哪份是用户改的、哪份是我们上次写下去的**。
+    那就把这件事记下来：`.seeded.json` 存「我们上次写给你的那份长什么样」。于是：
+
+      · 磁盘上没有            → 复制，记账
+      · 和我们上次写的一字不差 → 用户没动过，**安全升级**，更新记账
+      · 和我们上次写的不一样   → 用户改过，**留着不动**，并说出来
+      · 台账里根本没有         → v0.2.0 及更早装的，分不清，**留着不动**，
+                                 挂到界面上让人自己决定要不要更新（覆盖前留 .bak）
     """
     if not BUNDLE:
         return
-    landed = 0
+    state = _seed_state()
+    known = dict(state.get("files") or {})
+    landed, updated, kept, pending = 0, [], [], []
     for top in ("project-delivery", "agent-worksheet"):
         src_root = os.path.join(BUNDLE, top)
         if not os.path.isdir(src_root):
@@ -2126,21 +2250,51 @@ def _seed_repo():
         for dirpath, _dirnames, filenames in os.walk(src_root):
             rel = os.path.relpath(dirpath, src_root)
             dst_dir = os.path.join(REPO, top) if rel == "." else os.path.join(REPO, top, rel)
+            sub = "" if rel == "." else rel.replace("\\", "/") + "/"
             for fn in filenames:
-                dst = os.path.join(dst_dir, fn)
-                if os.path.isfile(dst):
-                    continue                      # 用户的，动都不动
+                src, dst = os.path.join(dirpath, fn), os.path.join(dst_dir, fn)
+                key = "%s/%s%s" % (top, sub, fn)
                 try:
-                    if not os.path.isdir(dst_dir):
-                        os.makedirs(dst_dir)
-                    shutil.copyfile(os.path.join(dirpath, fn), dst)
-                    landed += 1
+                    if not os.path.isfile(dst):
+                        if not os.path.isdir(dst_dir):
+                            os.makedirs(dst_dir)
+                        shutil.copyfile(src, dst)
+                        known[key] = _md5(dst)
+                        landed += 1
+                        continue
+                    cur, new = _md5(dst), _md5(src)
+                    if cur == new:
+                        known[key] = cur          # 已经是这一版，登记为「我们的」
+                        continue
+                    prev = known.get(key)
+                    if prev is not None and prev == cur:
+                        shutil.copyfile(src, dst)  # 我们上次写的，用户一字没动
+                        known[key] = new
+                        updated.append(key)
+                    elif prev is not None:
+                        kept.append(key)           # 用户改过，绝不覆盖
+                    else:
+                        pending.append(key)        # 老装机没台账，分不清，等人裁决
                 except OSError as e:
                     # 兜底必须出声：落不下去就等于又回到「记了会丢」，不许静默
                     print("[!!] 出厂真源落盘失败 %s：%s" % (fn, e))
+    try:
+        with io.open(SEED_MANIFEST, "w", encoding="utf-8") as f:
+            json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "version": _read_version(),
+                       "files": known, "kept": kept, "pending": pending},
+                      f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print("[!!] 写不了升级台账 %s：%s（下次启动会当成老装机处理）" % (SEED_MANIFEST, e))
     if landed:
         print("[首跑] 已把 %d 个出厂方法论文件落到 %s" % (landed, REPO))
         print("       以后你在这里改的、记的，都归你——升级 exe 不会覆盖它们。")
+    if updated:
+        print("[升级] %d 个你没改过的方法论文件已更新到新版：%s" % (len(updated), "、".join(updated[:5])))
+    if kept:
+        print("[保留] %d 个你改过的文件没被覆盖（新版内容不同）：%s" % (len(kept), "、".join(kept[:5])))
+    if pending:
+        print("[待定] %d 个文件是更早版本装的、认不出来历，没动：%s" % (len(pending), "、".join(pending[:5])))
+        print("       要不要换成新版，去 设置 → 整理 → 🔧 体系自检 里决定（覆盖前会留 .bak）")
 
 
 def main():

@@ -62,10 +62,20 @@ up = wait_up(8765)
 rec("1 clean start: port up", up, "8765 listening" if up else "TIMEOUT")
 base_owner = None
 if up:
+    # ⛔ 这里以前写死 `total == 59 and ok == 59`。两个毛病：
+    #    ① 真源清单只要合法地多一条，它就为**错误的理由**报红，红久了没人看；
+    #    ② 59 是某天的快照，写下来那刻就开始烂——跟坑库 expect:38 烂到 42 是同一个病。
+    #    该断言的是**不变量**：清单里该在的全在、没有失踪的。
+    #    再加一条 applicable > 0 —— 清单解析失败时读数全是 0，0==0 照样"通过"，
+    #    那是真空绿（坑库 T13）。
     h = health()
-    rec("1 clean start: 59/59 real green",
-        h.get("total") == 59 and h.get("ok") == 59 and not h.get("missing"),
-        "total=%s ok=%s missing=%s noroot=%s" % (h.get("total"), h.get("ok"), len(h.get("missing", [])), h.get("noroot")))
+    ok, app_ = h.get("ok"), h.get("applicable")
+    rec("1 clean start: 真源清单全绿且没有失踪的",
+        isinstance(app_, int) and app_ > 0 and ok == app_
+        and not h.get("missing") and not h.get("absent"),
+        "ok=%s/applicable=%s total=%s missing=%s absent=%s noroot=%s"
+        % (ok, app_, h.get("total"), len(h.get("missing", [])), h.get("absent"), h.get("noroot")))
+    BASE_OK = ok
     base_owner = owner_pid(8765)
     rec("1 owner pid captured", base_owner is not None, "pid=%s" % base_owner)
 
@@ -92,7 +102,11 @@ if up:
     rec("4 concurrent x4: single owner", same and all(c == 0 for c in codes),
         "exits=%s owner unchanged=%s" % (codes, same))
     try:
-        h = health(); rec("4 survivor healthy after storm", h.get("ok") == 59, "ok=%s" % h.get("ok"))
+        # 同样不写死数字：跟风暴前那次读到的比，要求「一个都没掉」
+        h = health()
+        rec("4 survivor healthy after storm",
+            isinstance(BASE_OK, int) and BASE_OK > 0 and h.get("ok") == BASE_OK,
+            "ok=%s（风暴前 %s）" % (h.get("ok"), BASE_OK))
     except Exception as e:
         rec("4 survivor healthy after storm", False, repr(e))
 

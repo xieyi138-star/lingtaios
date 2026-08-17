@@ -150,7 +150,9 @@ PROBES = {
 
 # ── 主流程 ────────────────────────────────────────────────
 
-def run(conf, root):
+def run(conf, root, high_water=None):
+    """high_water：上一次跑出来的历史最高值（从 02_状态.json 读），给 ratchet 探针用。"""
+    high_water = high_water or {}
     rows, alarms = [], []
     vals = {}
     for spec in conf.get("probes", []):
@@ -168,6 +170,21 @@ def run(conf, root):
                 flag = u"🔴"
                 alarms.append(u"**%s 漂了**：期望 %s，实读 %s —— 要么产物变了，要么期望该更新，**必须有人裁决**"
                               % (name, spec["expect"], v))
+            # ⛔ 等值 expect 用在**只增不减**的量上，是个必然烂掉的设计：每加一条就红
+            #    一次，于是人要么机械改数字、要么学会无视它。实测代价：坑库探针
+            #    expect=38，真值一路涨到 80 都没人改，漂了 42 条；而那条告警的原文
+            #    写的是「比值下跌 = 坑在流失」——它想守的本来就是**不许减少**。
+            #    ratchet 把这件事自动化：涨了自己抬底线（不需要人动手，所以不会烂），
+            #    掉了才红（那是删除，本来就该有人裁决）。底线存在生成物 02_状态.json 里，
+            #    不写回人手写的 状态源.json——配置归人，读数归机器。
+            if spec.get("ratchet"):
+                prev = high_water.get(name)
+                if prev is not None and v < prev:
+                    flag = u"🔴"
+                    alarms.append(
+                        u"**%s 变少了**：历史最高 %s，实读 %s —— 只增不减的量掉了，"
+                        u"要么是走审计删的（那就说清删了哪几条），要么是被改没打招呼，**必须有人裁决**"
+                        % (name, prev, v))
             if spec.get("type") == "declared":
                 flag = u"🟡"
             rows.append((name, v, how, flag))
@@ -246,8 +263,13 @@ def _selftest():
             {"name": "闸BOM", "type": "regex_count", "glob": "g_bom.py", "pattern": "^def check_"},
             {"name": "坏", "type": "regex_count", "glob": "nope/*.py", "pattern": "x"},
             {"name": "期望漂移", "type": "file_count", "glob": "docs/law-*.md", "expect": 99},
+            # ratchet：涨了不许吭声、掉了必须红。两个方向都得验——
+            # 只验「掉了会红」的话，一个永远报红的实现也能全绿。
+            {"name": "棘轮涨", "type": "file_count", "glob": "docs/law-*.md", "ratchet": True},
+            {"name": "棘轮掉", "type": "file_count", "glob": "docs/law-*.md", "ratchet": True},
         ], "health": [{"name": "闸/法", "numerator": "闸", "denominator": "法", "alarm": "上升即警报"}]}
-        rows, alarms, vals = run(conf, d)
+        # 历史最高：「棘轮涨」记 1（实读 2，涨了）；「棘轮掉」记 5（实读 2，掉了）
+        rows, alarms, vals = run(conf, d, {"棘轮涨": 1, "棘轮掉": 5})
         ok = True
 
         def ck(c, m):
@@ -259,6 +281,8 @@ def _selftest():
         ck(vals.get("闸BOM") == 2, u"**BOM 文件也要数对**（实测曾少数 1 条，静默无告警）")
         ck(any(u"取数失败" in a for a in alarms), u"**破坏性**：glob 匹配不到时出声，不静默返回 0")
         ck(any(u"漂了" in a for a in alarms), u"**破坏性**：expect 不符时报红")
+        ck(any(u"棘轮掉 变少了" in a for a in alarms), u"**破坏性**：ratchet 掉到历史最高以下报红")
+        ck(not any(u"棘轮涨" in a for a in alarms), u"ratchet 涨上去**不报红**（只增不减的量不该每加一条红一次）")
         ck(health(conf, vals)[0][1] == 1.0, u"健康比算对")
         ck(u"人一个数字都不许手写" in render(conf, rows, alarms, health(conf, vals)), u"渲染带红线声明")
         return ok
@@ -287,14 +311,31 @@ def main():
     with io.open(conf_path, encoding="utf-8") as f:
         conf = json.load(f)
     root = os.path.abspath(os.path.join(here, conf.get("root", "..")))
-    rows, alarms, vals = run(conf, root)
+    # 历史最高值存在生成物里（不写回人手写的配置）：配置归人，读数归机器。
+    prev_hw = {}
+    if os.path.isfile(out_json):
+        try:
+            with io.open(out_json, encoding="utf-8") as f:
+                prev_hw = json.load(f).get("high_water") or {}
+        except (ValueError, OSError):
+            prev_hw = {}
+    rows, alarms, vals = run(conf, root, prev_hw)
     hrows = health(conf, vals)
     md = render(conf, rows, alarms, hrows)
     if "--check" not in sys.argv:
+        # 只对声明了 ratchet 的探针记高水位，且只往上抬——掉下去那次已经报过红了，
+        # 把底线跟着降下去等于把告警一次性抹掉，下次再掉就没人知道。
+        hw = dict(prev_hw)
+        for spec in conf.get("probes", []):
+            if not spec.get("ratchet"):
+                continue
+            v = vals.get(spec["name"])
+            if isinstance(v, int):
+                hw[spec["name"]] = max(v, prev_hw.get(spec["name"], v))
         io.open(out_md, "w", encoding="utf-8").write(md)
         io.open(out_json, "w", encoding="utf-8").write(
             json.dumps({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "values": vals,
-                        "alarms": alarms}, ensure_ascii=False, indent=2))
+                        "alarms": alarms, "high_water": hw}, ensure_ascii=False, indent=2))
         print(u"written: %s" % out_md)
     for a in alarms:
         print(u"ALARM: " + a)

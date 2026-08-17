@@ -35,6 +35,19 @@ const PROJ_STATE = {
   bad_json: ["bad", "✗ 状态文件损坏"],
   null: ["muted", ""],
 };
+/* ⛔ 「状态已生成」不带时间——一年前生成的和刚生成的长得一模一样。
+   实测代价：本项目自己的 02_状态 停在一天前，写着「坑库 38 条 ✅ 无告警」，
+   而真源已经 80 条。驾驶舱顶着旧快照报平安，漂了 42 条没有任何东西出声。
+   补了「🔄 重算状态」按钮还不够：**没人告诉你该按，按钮就等于不存在**。 */
+const STATE_STALE_DAYS = 7;
+function stateChip(p) {
+  const [cls, label] = PROJ_STATE[p.state] || PROJ_STATE.null;
+  if (p.state !== "generated") return [cls, label];
+  const d = p.state_age_days;
+  if (d === null || d === undefined) return [cls, label];
+  if (d >= STATE_STALE_DAYS) return ["warn", "⏳ 状态 " + d + " 天前"];
+  return ["good", d <= 0 ? "✓ 状态 今天" : "✓ 状态 " + d + " 天前"];
+}
 function isActive(p) { return p.state || p.alarms.length || p.handoff_mtime; }
 function organN(p) { return Object.values(p.organs).filter(Boolean).length; }
 
@@ -54,7 +67,7 @@ function organDots(p) {
 }
 
 function slimCard(p) {
-  const [scls, sl] = PROJ_STATE[p.state] || PROJ_STATE.null;
+  const [scls, sl] = stateChip(p);
   const n = organN(p);
   return '<div class="card slim clickable" data-path="' + esc(p.path) + '"><div class="card-head"><strong>' + esc(p.name) + "</strong>" +
     '<span class="chip ' + scls + '">' + sl + "</span></div>" +
@@ -104,6 +117,15 @@ function renderProjectDetail(d) {
        而文档给的办法是跑 python，他机器上可能根本没有。 */
     (d.has_brain ? '<button class="chip-btn" id="pd-regen">🔄 重算状态</button>' : "") +
     '<button class="chip-btn" id="pd-remove">🗂 移出项目库</button></div>' +
+    /* 状态多老要写出来，并且就写在「重算」按钮旁边——把「该按了」和「怎么按」
+       放在同一处，否则用户看到按钮也不知道现在该不该按。 */
+    (d.state_at
+      ? '<p class="muted-note">状态生成于 ' + esc(d.state_at) +
+        (d.state_age_days >= 7
+          ? ' —— <b>已经 ' + d.state_age_days + ' 天没重算了</b>，上面的数字可能是旧的'
+          : "") + "</p>"
+      : (d.has_brain
+        ? '<p class="muted-note">状态还没生成过 —— 点上面「🔄 重算状态」。</p>' : "")) +
     '<div id="pd-rm-box"></div>';
 
   if (d.alarms && d.alarms.length) {
@@ -119,8 +141,14 @@ function renderProjectDetail(d) {
     html += '<div class="section"><h3>📌 进行中（' + d.notes.length + " 注）</h3><ul>" +
       d.notes.map(t => "<li>" + esc(t) + "</li>").join("") + "</ul></div>";
   }
-  if (d.handoff_done) {
+  if (d.handoff_done && !d.handoff_blank) {
     html += '<div class="section"><h3>✅/⏳ 上一窗做完的与没做完的</h3><div class="doc">' + d.handoff_done + "</div></div>";
+  } else if (d.handoff_blank) {
+    /* 还是出厂模板（一屏 <...> 占位符）。原样渲染出来长得像内容，
+       陌生人会以为坏了或自己漏填了。换成一句告诉他下一步。 */
+    html += '<div class="section"><h3>✅/⏳ 上一窗做完的与没做完的</h3>' +
+      '<p class="muted-note">还没有——这是刚建好的项目。点上面「📋 复制「继续做」指令」' +
+      "粘给任何 AI，它做完一段就会把这里填上。</p></div>";
   }
   if (d.traces && d.traces.length) {
     html += '<div class="section"><details><summary>📜 最近轨迹（' + d.traces.length + ' 行 · 自进化的原料）</summary>' +
@@ -344,7 +372,12 @@ function renderHome() {
     // 零遥测意味着「有没有人在用」你永远不知道。唯一诚实的办法是给一个**用户自愿**的
     // 出口——不采集、不追踪，他愿意才点。METRICS.md 里写的「用户自愿信号」就是这个，
     // 之前只写在文档里没做出来。
-    ' · <a href="' + REPO_URL + '/discussions" target="_blank" rel="noopener">这东西帮到你了？说一声 →</a>' +
+    // ⛔ 但它以前从首跑第一屏就在了：一个字都没用过就问「帮到你了吗」，既尴尬，
+    //    也把唯一的需求信号口糟蹋了——那时点进来的人根本没被帮到过。
+    //    要等他真跑起来一个项目（状态生成过）再问，答案才有信息量。
+    ((DATA.projects || []).some(p => p.state === "generated")
+      ? ' · <a href="' + REPO_URL + '/discussions" target="_blank" rel="noopener">这东西帮到你了？说一声 →</a>'
+      : "") +
     "</span></div>";
   const rest = DATA.projects.length - active.length;
   html += '<div class="section"><h2>进行中的项目（' + active.length + '）</h2><div class="cards">' +
@@ -860,6 +893,33 @@ function renderEvolutionInto(box) {
       "</div>";
   };
 
+  /* 升级传播：新版带来的方法论更新里，哪些没自动生效、为什么。
+     ⛔ 这一节只处理「认不出来历」的（v0.2.0 及更早装的，台账里没有）。
+        你**明确改过**的文件只报告、不给覆盖入口——那条红线不给开关。 */
+  const seedPending = ev.seed_pending || [];
+  const seedKept = ev.seed_kept || [];
+  let seedHtml = "";
+  if (seedPending.length || seedKept.length) {
+    seedHtml = '<div class="section"><h3>📦 出厂文件的升级</h3>';
+    if (seedKept.length) {
+      seedHtml += '<p class="muted-note">这 ' + seedKept.length +
+        " 个你改过，新版**没有**覆盖（你的改动优先）：<br>" +
+        seedKept.map(k => "<code>" + esc(k) + "</code>").join("、") + "</p>";
+    }
+    if (seedPending.length) {
+      seedHtml += '<p class="muted-note">这 ' + seedPending.length +
+        " 个是更早版本装的，认不出来历，所以没动。要换成新版就勾上——" +
+        "<b>覆盖前会在同目录留一份 .bak</b>。</p>" +
+        seedPending.map((k, i) =>
+          '<label class="q-label inline"><input type="checkbox" class="seed-pick" data-k="' +
+          esc(k) + '" id="seed-' + i + '"> <code>' + esc(k) + "</code></label>").join("") +
+        '<div class="filter-row" style="margin-top:8px">' +
+        '<button class="chip-btn" id="seed-apply">换成新版</button>' +
+        '<span class="muted-note" id="seed-msg"></span></div>';
+    }
+    seedHtml += "</div>";
+  }
+
   let html = '<p class="muted-note">每周看一次。勾选 → 点删除，对应的记录会从文件里删掉。</p>';
   let any = false;
   for (const s of secs) {
@@ -884,7 +944,7 @@ function renderEvolutionInto(box) {
      (ev.identical_pairs || []).map(p => "<p>同名双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</p>").join("") ||
      '<p class="muted-note">没有断头或双份。</p>') +
     '<p class="muted-note"><a href="#" id="ev-goto-method">这些文件在哪 →</a></p></div>' +
-    maintSecs.map(renderSec).join("") + "</details>";
+    seedHtml + maintSecs.map(renderSec).join("") + "</details>";
 
   if (any || maintAny) {
     html += '<div class="filter-row"><button class="chip-btn bad-btn" id="ev-delete">🗑 删除所选</button>' +
@@ -893,14 +953,33 @@ function renderEvolutionInto(box) {
   }
   box.innerHTML = html;
   // 勾了几条要看得见——折叠之后更需要，否则不知道自己到底选了没有
+  /* ⛔ 这三处选择器必须排掉 .seed-pick。升级用的勾选框和「删除所选」的勾选框
+     长在同一个容器里，不排掉的话：勾了「换成新版」→ 计数把它算进去 →
+     点「🗑 删除所选」会拿它去调 audit_delete。两件事共用一个选择器就是这么出事的。 */
+  const PICKS = 'input[type="checkbox"]:not(.seed-pick)';
   const evCount = () => {
     const el = document.getElementById("ev-count");
     if (!el) return;
-    const n = box.querySelectorAll('input[type="checkbox"]:checked').length;
+    const n = box.querySelectorAll(PICKS + ":checked").length;
     el.textContent = n ? "已勾 " + n + " 条" : "未勾选";
   };
-  box.querySelectorAll('input[type="checkbox"]').forEach(c => { c.onchange = evCount; });
+  box.querySelectorAll(PICKS).forEach(c => { c.onchange = evCount; });
   evCount();
+  const seedBtn = document.getElementById("seed-apply");
+  if (seedBtn) {
+    seedBtn.onclick = async () => {
+      const files = [...box.querySelectorAll(".seed-pick:checked")].map(c => c.dataset.k);
+      const msg = document.getElementById("seed-msg");
+      if (!files.length) { msg.textContent = "先勾要换的文件"; return; }
+      seedBtn.disabled = true;
+      msg.textContent = "处理中…";
+      const r = await post("api/apply_seed_update", { files });
+      if (!r.ok) { seedBtn.disabled = false; msg.textContent = "✗ " + (r.error || "失败"); return; }
+      msg.textContent = "✓ 已换 " + r.updated.length + " 个（原件留在同目录的 .bak）" +
+        (r.failed.length ? "，失败 " + r.failed.length : "");
+      reloadData(() => renderEvolutionInto(box));
+    };
+  }
   const gm = document.getElementById("ev-goto-method");
   if (gm) {
     gm.onclick = e => {
@@ -915,7 +994,7 @@ function renderEvolutionInto(box) {
   const delBtn = document.getElementById("ev-delete");
   if (delBtn) {
     delBtn.onclick = async () => {
-      const checked = [...box.querySelectorAll('input[type="checkbox"]:checked')];
+      const checked = [...box.querySelectorAll(PICKS + ":checked")];
       if (!checked.length) {
         document.getElementById("ev-result").innerHTML =
           '<div class="bad-box">✗ 先勾选要删的条目</div>';
@@ -1580,6 +1659,11 @@ fetch("data.json")
   .then(r => r.json())
   .then(d => {
     DATA = d;
+    // 版本号从 data.json 取，index.html 里不再存第二份。
+    // ⛔ 此前 VERSION / README / index.html 各写一份，靠 make_release 的
+    //    「三处一致」检查兜着——检查只拦得住不一致，拦不住三处一起忘。
+    const vb = document.getElementById("ver-badge");
+    if (vb) vb.textContent = d.version ? "v" + d.version : "";
     // 侧栏原来印着「生成时间 + machine_id」。时间首页已经有了；machine_id 是给
     // 多机分数据用的内部标识，用户看了不知道要拿它干什么——去掉，侧栏留给版本号。
     document.getElementById("nav-foot").textContent = "";
