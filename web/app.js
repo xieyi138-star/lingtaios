@@ -59,9 +59,13 @@ function slimCard(p) {
   return '<div class="card slim clickable" data-path="' + esc(p.path) + '"><div class="card-head"><strong>' + esc(p.name) + "</strong>" +
     '<span class="chip ' + scls + '">' + sl + "</span></div>" +
     '<div class="chip-row">' + organDots(p) +
-    '<span class="chip ' + (n > 0 ? "good" : "muted") + '">器官 ' + n + "/9</span>" +
+    // ⛔ 卡片上只放用户看得懂、且会据此行动的东西。
+    //    「器官 0/9」对没装系统的项目等于常年挂个 0，看着像坏了——直接说「未装系统」。
+    //    「⚠ 可升级 N」是通用件同步（体系升级传播），维护体系的人才需要，
+    //    用户不改方法论，撤到项目详情页里去。
+    (n > 0 ? '<span class="chip good">六器官 ' + n + "/9</span>"
+           : '<span class="chip muted">未装系统</span>') +
     (p.alarms.length ? '<span class="chip warn">告警 ' + p.alarms.length + "</span>" : "") +
-    (p.outdated && p.outdated.length ? '<span class="chip warn">⚠ 可升级 ' + p.outdated.length + "</span>" : "") +
     (p.handoff_mtime ? '<span class="chip muted">交接 ' + esc(p.handoff_mtime.slice(5, 16)) + "</span>" : "") +
     "</div></div>";
 }
@@ -89,7 +93,8 @@ function renderProjectDetail(d) {
   let html = '<div class="section"><div class="filter-row">' +
     '<button class="chip-btn" id="pd-back">← 返回</button>' +
     '<h2 style="border:0;margin:0;flex:1">' + esc(d.name) + "</h2>" +
-    '<span class="chip ' + (n > 0 ? "good" : "muted") + '">器官 ' + n + '/9</span></div>' +
+    (n > 0 ? '<span class="chip good">六器官 ' + n + "/9</span>"
+           : '<span class="chip muted">未装系统</span>') + "</div>" +
     '<p class="muted-note"><code>' + esc(d.path) + "</code></p>" +
     '<div class="filter-row">' +
     '<button class="chip-btn primary" id="pd-resume">📋 复制「继续做」指令</button>' +
@@ -230,7 +235,7 @@ function renderProjectDetail(d) {
         clearInterval(timer);
         if (rj.ok) {
           const warn = rj.generator && rj.generator.exit !== 0 ? " ⚠ 生成器有告警，看下方状态" : "";
-          box.innerHTML = '<div class="ok-box">✓ 装好了：六器官 12 件 + 02_状态已生成 + 装配图已登记' +
+          box.innerHTML = '<div class="ok-box">✓ 装好了：六器官 12 个文件已写入项目的 brain\\ 目录，状态也生成好了' +
             esc(warn) + "。<br>1 秒后自动刷新详情…</div>";
           setTimeout(() => goProjectDetail(d.path), 1000);
         } else {
@@ -253,11 +258,14 @@ function renderHome() {
   const h = DATA.health;
   const alarmProjects = DATA.projects.filter(p => p.alarms.length);
   const active = DATA.projects.filter(isActive);
-  // 分母是「这台机器该有的」，不是登记总数——无根件和本机专属件不该算成你缺东西
-  const denom = (h.applicable != null ? h.applicable : h.total) || 0;
-  const pct = denom ? Math.round(h.ok / denom * 100) : 0;
+  // ⛔ 这个环原来显示「真源在位 59/59」——那是灵台自己的内部一致性检查，
+  //    用户根本不知道「真源」是什么，而它占着首页最大最显眼的位置。
+  //    换成他真正关心的：手上的项目有几个已经装上系统了。
+  //    真源健康度没删，挪到 设置 → 进化审计 里（要维护体系的人才去看）。
   const R = 52, C = 2 * Math.PI * R;
-  const ringColor = h.missing.length ? "#fb7185" : "#34d399";
+  const pct = DATA.projects.length
+    ? Math.round(active.length / DATA.projects.length * 100) : 0;
+  const ringColor = alarmProjects.length ? "#fb7185" : "#34d399";
   const ring = '<div class="hero-ring">' +
     '<svg width="128" height="128" viewBox="0 0 128 128"><defs>' +
     '<linearGradient id="ringGrad" x1="0" y1="1" x2="1" y2="0">' +
@@ -265,26 +273,29 @@ function renderHome() {
     "</linearGradient></defs>" +
     '<circle class="ring-bg" cx="64" cy="64" r="' + R + '"/>' +
     '<circle class="ring-val" cx="64" cy="64" r="' + R + '" stroke-dasharray="' + C + '" stroke-dashoffset="' + (C * (1 - pct / 100)).toFixed(1) + '"/>' +
-    '</svg><div class="ring-num"><b>' + h.ok + "</b><span>/ " + denom + " 真源在位</span></div></div>";
+    '</svg><div class="ring-num"><b>' + active.length + "</b><span>/ " + DATA.projects.length +
+    " 已装系统</span></div></div>";
   const tiles = [
     ["告警项目", String(alarmProjects.length), alarmProjects.length ? "warn" : "good"],
     ["项目总数", String(DATA.projects.length), "good"],
-    ["坑库", String(DATA.pitfall.rows.length), "good"],
+    ["经验库", String(DATA.pitfall.rows.length), "good"],
   ];
   let html = '<div class="hero">' + ring + tiles.map(t =>
     '<div class="tile ' + t[2] + '"><div class="tile-num">' + esc(t[1]) + '</div><div class="tile-label">' + esc(t[0]) + "</div></div>"
   ).join("") + "</div>";
 
   html += '<div class="section card start-card"><h2>今日开工</h2>' +
-    '<p class="muted-note">红绿灯全绿 → 复制 → 粘给任何 AI → 开工。收窗不用管——AI 分段落盘，进度一直在文件里。</p>' +
+    // 「红绿灯全绿 / 收窗 / 分段落盘」都是自家说法，第一次来的人看不懂。
+    '<p class="muted-note">点「复制」→ 粘给任何 AI → 直接开工。不用记得收尾，AI 每做完一段就把进度写回文件。</p>' +
     '<div class="filter-row">' +
     '<button class="chip-btn primary" id="h-open-btn">📋 复制开窗三句话</button>' +
-    '<button class="chip-btn accent-btn" id="h-newproj">＋ 新项目（自动装六器官）</button>' +
+    '<button class="chip-btn accent-btn" id="h-newproj">＋ 新项目</button>' +
     // 「新项目」是从零建一个；「添加已有」是把电脑上已经存在的项目收进来。
     // 两回事，用户想收录已有项目时不该只能去项目页找
     '<button class="chip-btn" id="h-addproj">📂 添加已有项目</button>' +
-    '<button class="chip-btn" id="h-refresh">🔄 深查（重算全部真源）</button></div>' +
-    '<p class="muted-note">快照生成于 ' + esc(DATA.generated_at) + " · 数据全部机器生成，人不手写</p>" +
+    // 「深查（重算全部真源）」——用户不知道什么叫真源，他只想让页面反映硬盘上的实况
+    '<button class="chip-btn" id="h-refresh">🔄 重新扫描</button></div>' +
+    '<p class="muted-note">数据更新于 ' + esc(DATA.generated_at) + "</p>" +
     '<p class="muted-note" id="h-note"></p></div>';
 
   const ev = DATA.evolution || {};
@@ -292,15 +303,16 @@ function renderHome() {
   // 够不着的项目要出声：外接硬盘拔了/网络盘断了，项目从列表消失而不吭一声，
   // 人只会以为东西丢了
   const gone = DATA.unreachable_projects || [];
-  if (h.missing.length || h.identical_pairs.length || staleN || gone.length) {
-    html += '<div class="section"><h2>🔴 先修这里</h2><ul>' +
-      h.missing.map(m => "<li>" + esc(m.path) + " → " + esc(m.resolved) + "</li>").join("") +
-      h.identical_pairs.map(p => "<li>同名同内容双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</li>").join("") +
+  // ⛔ 首页只放**用户要处理的事**。
+  //    「断头 / 同名双份」是装配图指针的一致性问题，属于体系自检，挪去 设置 → 进化审计；
+  //    留在这儿的是他真的要动手的两件：项目够不着了、交接太久没更新。
+  if (staleN || gone.length) {
+    html += '<div class="section"><h2>🔴 先看这里</h2><ul>' +
       gone.map(p => "<li>📴 够不着：<code>" + esc(p) +
         "</code>——外接硬盘没插？网络盘断了？目录挪走了？（它还记在你的项目清单里）</li>").join("") +
       // 提到哪儿就得能点过去：写「见设置→进化审计」却不给链接，等于让人自己找路
-      (staleN ? "<li>🟡 有 " + staleN + " 个项目的交接超 7 天没更新——该生核了 " +
-        '<a href="#" id="h-goto-evolve">去进化审计 →</a></li>' : "") +
+      (staleN ? "<li>🟡 有 " + staleN + " 个项目的交接超 7 天没更新——" +
+        '<a href="#" id="h-goto-evolve">去看看 →</a></li>' : "") +
       "</ul></div>";
   }
   if (alarmProjects.length) {
@@ -333,14 +345,14 @@ function renderHome() {
   if (gev) gev.onclick = e => { e.preventDefault(); go("system"); };
   document.getElementById("h-refresh").onclick = async () => {
     const b = document.getElementById("h-refresh");
-    b.disabled = true; b.textContent = "🔄 深查中…";
+    b.disabled = true; b.textContent = "🔄 扫描中…";
     try {
       const r = await fetch("api/refresh", { method: "POST" });
       const d = await r.json();
       if (d.generated_at) { DATA = d; renderHome(); }
-      else { b.disabled = false; b.textContent = "✗ " + (d.error || "深查失败"); }
+      else { b.disabled = false; b.textContent = "✗ " + (d.error || "扫描失败"); }
     } catch (e) {
-      b.disabled = false; b.textContent = "✗ 深查失败";
+      b.disabled = false; b.textContent = "✗ 扫描失败";
     }
   };
   fetch("api/templates", { method: "POST" }).then(r => r.json()).then(t => {
@@ -556,7 +568,8 @@ function renderPitfall() {
   const cols = (DATA.pitfall.columns || []).filter(c => !String(c).startsWith("__"));
   const sections = DATA.pitfall.sections;
   let html = '<div class="section"><h2>坑库（' + PIT_ROWS.length + " 条 · 踩坑前查一眼）</h2>" +
-    '<div class="filter-row"><input id="pit-q" type="search" placeholder="搜索：坑 / 防法 / 出处">' +
+    '<p class="muted-note">点任意一行，展开它的出处和失效判据。</p>' +
+    '<div class="filter-row"><input id="pit-q" type="search" placeholder="搜索坑或防法">' +
     '<select id="pit-sec"><option value="">全部分区</option>' +
     sections.map(s => '<option value="' + esc(s.name) + '">' + esc(s.name) + "（" + s.count + "）</option>").join("") +
     '</select><button class="chip-btn accent-btn" id="pit-add">＋ 记一条坑</button></div>' +
@@ -569,7 +582,7 @@ function renderPitfall() {
     '<label>失效判据（必填）<input id="pf-inv" placeholder="防的事被结构性消除即删，如：XX工具修复后"></label>' +
     '</div><div class="filter-row"><button class="chip-btn primary" id="pf-go">入库</button>' +
     '<span class="muted-note">防法/失效判据缺一不放行——涨有门槛</span></div><div id="pf-result"></div></div>' +
-    '<table id="pit-table"><thead><tr>' + cols.map(c => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody></tbody></table>" +
+    '<table id="pit-table"><thead><tr>' + PIT_MAIN.map(c => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody></tbody></table>" +
     '<div class="filter-row"><button class="chip-btn" id="pit-more">显示更多</button>' +
     '<span class="muted-note" id="pit-count"></span></div></div>';
   main.innerHTML = html;
@@ -604,17 +617,35 @@ function renderPitfall() {
   drawPitRows();
 }
 let pitLimit = PIT_PAGE;
+// 查坑的人只要两件事：这是什么坑、怎么防。其余四列是**元数据**：
+// 「出处」写的是记录者自己项目的代号（Savant / stock-agent / NEXUS …），别人看不懂；
+// 「触发」是内部计数；「失效判据」只在决定要不要删这条坑时才用；「入库」是日期。
+// 七列全平铺出来，表格宽到要横向滚，真正有用的那两列反而被挤没了。
+// 所以主表只留三列，元数据点开那一行才显示——搜索仍然搜全部列，不影响找得到。
+const PIT_MAIN = ["编号", "一句话坑", "防法（照做即可）"];
 function drawPitRows() {
   const q = (document.getElementById("pit-q").value || "").toLowerCase();
   const sec = document.getElementById("pit-sec").value;
   // `__` 开头 = 后端内部字段（如 __section 是给分区筛选用的），不该出现在表格里
   const cols = (DATA.pitfall.columns || []).filter(c => !String(c).startsWith("__"));
+  const meta = cols.filter(c => PIT_MAIN.indexOf(c) < 0);
   const rows = PIT_ROWS.filter(r =>
     (!sec || r.__section === sec) &&
     (!q || cols.some(c => String(r[c] || "").toLowerCase().includes(q))));
   const shown = rows.slice(0, pitLimit);
-  document.querySelector("#pit-table tbody").innerHTML = shown.map(r =>
-    "<tr>" + cols.map(c => "<td>" + esc(r[c]) + "</td>").join("") + "</tr>").join("");
+  document.querySelector("#pit-table tbody").innerHTML = shown.map((r, i) =>
+    '<tr class="pit-row" data-i="' + i + '" style="cursor:pointer">' +
+    PIT_MAIN.map(c => "<td>" + esc(r[c]) + "</td>").join("") + "</tr>" +
+    '<tr class="pit-meta" data-i="' + i + '" style="display:none"><td colspan="' +
+    PIT_MAIN.length + '"><span class="muted-note">' +
+    meta.filter(c => String(r[c] || "").trim()).map(c => esc(c) + "：" + esc(r[c])).join("　·　") +
+    "</span></td></tr>").join("");
+  document.querySelectorAll("#pit-table .pit-row").forEach(tr => {
+    tr.onclick = () => {
+      const m = document.querySelector('#pit-table .pit-meta[data-i="' + tr.dataset.i + '"]');
+      if (m) m.style.display = m.style.display === "none" ? "" : "none";
+    };
+  });
   document.getElementById("pit-count").textContent = "显示 " + shown.length + " / " + rows.length;
   document.getElementById("pit-more").style.display = rows.length > shown.length ? "" : "none";
   if (document.getElementById("pit-more").style.display === "none") pitLimit = PIT_PAGE;
@@ -624,16 +655,22 @@ function drawPitRows() {
 /* ---------- 进化审计（渲染进设置页 tab） ---------- */
 function renderEvolutionInto(box) {
   const ev = DATA.evolution || {};
+  // 这一页分两层：上面是**你要处理的**，下面折叠的是**灵台自己的体检**。
+  // 混在一起的后果是：用户被一堆看不懂的「断头 / 双份 / 通用件落后」挡住，
+  // 找不到真正该他动手的那两三条。
   const secs = [
-    ["待补失效判据（只降不涨才是活）", ev.missing_invalid || [], "pitfall",
-      r => r["编号"] + " " + (r["一句话坑"] || "").slice(0, 50)],
     ["候选删除（入库>3个月 且 触发≤1）", ev.candidates || [], "pitfall",
       r => r["编号"] + " " + (r["一句话坑"] || "").slice(0, 50)],
     ["C 类待办已到期", ev.expired_todos || [], "todo",
       r => r["project"] + "： " + (r["line"] || "").slice(0, 80)],
-    ["🟡 交接超 7 天没更新（该生核了）", ev.stale_handoffs || [], "handoff",
+    ["🟡 交接超 7 天没更新", ev.stale_handoffs || [], "handoff",
       r => r["project"] + "（" + r["days"] + " 天）"],
-    ["🔄 通用件落后（体系已升级，项目可同步）", (DATA.sync || []).map(s => ({
+  ];
+  // 下面这些是维护体系的人才看的：判据强度、待补判据、真源断头/双份、通用件落后。
+  const maintSecs = [
+    ["待补失效判据", ev.missing_invalid || [], "pitfall",
+      r => r["编号"] + " " + (r["一句话坑"] || "").slice(0, 50)],
+    ["🔄 通用件落后（体系升级后，项目可同步）", (DATA.sync || []).map(s => ({
       编号: s.project, path: s.path, line: "落后：" + s.outdated.join("、") })), "sync", r => r["编号"] + "：" + r.line],
   ];
   // 判据强度：只读提示，不给勾选框——它不是「该删什么」，是「哪条判据当不了判据」。
@@ -671,37 +708,52 @@ function renderEvolutionInto(box) {
     gradeHtml += "</div>";
   }
 
-  let html = '<p class="muted-note">每周跑一次（双击即重算）。勾选 → 点删除 → 真源行被删（git 有回滚点）。</p>' +
-    gradeHtml +
-    // 同样的道理：提到「方法」页就得能点过去，别让人自己找 tab
-    '<div class="section"><h3>🔴 断头 / 双份（只读，' +
-    '<a href="#" id="ev-goto-method">去「方法」页查装配图修指针 →</a>）</h3>' +
-    ((ev.broken || []).map(m => "<p>断头：" + esc(m.path) + "</p>").join("") +
-     (ev.identical_pairs || []).map(p => "<p>双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</p>").join("") ||
-     '<p class="muted-note">无。</p>') + "</div>";
-  let any = false;
-  for (const [title, items, kind, fmt] of secs) {
-    if (!items.length) continue;
-    any = true;
-    // 长清单默认折叠：38 条待补全平铺会把后面几张清单和「删除所选」全埋了，
-    // 实测整页 2 屏高——勾选框散在各处，按钮却在最底下，交互链是断的
+  // 长清单默认折叠：几十条全平铺会把后面几张清单和「删除所选」全埋了，
+  // 实测整页 2 屏高——勾选框散在各处，按钮却在最底下，交互链是断的
+  const renderSec = ([title, items, kind, fmt]) => {
+    if (!items.length) return "";
     const long = items.length > 8;
     const body = items.map((r, i) =>
       '<label class="q-label inline"><input type="checkbox" data-kind="' + kind + '" data-id="' +
       esc(r["编号"] || r["project"] || i) + '" data-proj="' + esc(r["path"] || "") + '"> ' +
       esc(fmt(r)) + "</label>").join("");
-    html += '<div class="section">' +
+    return '<div class="section">' +
       (long
         ? "<details><summary><b>" + esc(title) + "（" + items.length + "）</b>" +
           '<span class="muted-note"> · 点开逐条勾</span></summary>' +
           '<div style="margin-top:8px">' + body + "</div></details>"
         : "<h3>" + esc(title) + "（" + items.length + "）</h3>" + body) +
       "</div>";
+  };
+
+  let html = '<p class="muted-note">每周看一次。勾选 → 点删除，对应的记录会从文件里删掉。</p>';
+  let any = false;
+  for (const s of secs) {
+    if (!s[1].length) continue;
+    any = true;
+    html += renderSec(s);
   }
-  if (!any) {
-    html += '<div class="ok-box">✓ 五清单全空——壳是干净的，继续生长。</div>';
-  } else {
-    html += '<div class="filter-row"><button class="chip-btn bad-btn" id="ev-delete">🗑 删除所选（不可恢复，git 有回滚点）</button>' +
+  if (!any) html += '<div class="ok-box">✓ 没有要你处理的——干净。</div>';
+
+  // ── 下面是灵台自己的体检，默认收起来。用户不维护这套体系，不该被它挡在前面 ──
+  const maintAny = maintSecs.some(s => s[1].length) ||
+    (ev.broken || []).length || (ev.identical_pairs || []).length;
+  const h2 = DATA.health || {};
+  html += '<details style="margin-top:14px"><summary><b>🔧 体系自检</b>' +
+    '<span class="muted-note"> · 灵台自己的一致性检查，一般不用管' +
+    (maintAny ? "（有 " + ((ev.broken || []).length + (ev.identical_pairs || []).length +
+      maintSecs.reduce((n, s) => n + s[1].length, 0)) + " 项）" : "（全清）") +
+    "</span></summary>" + gradeHtml +
+    '<div class="section"><h3>方法论真源在位：' + esc(h2.ok) + " / " +
+    esc(h2.applicable != null ? h2.applicable : h2.total) + "</h3>" +
+    ((ev.broken || []).map(m => "<p>断头：" + esc(m.path) + "</p>").join("") +
+     (ev.identical_pairs || []).map(p => "<p>同名双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</p>").join("") ||
+     '<p class="muted-note">没有断头或双份。</p>') +
+    '<p class="muted-note"><a href="#" id="ev-goto-method">去「方法」页看装配图 →</a></p></div>' +
+    maintSecs.map(renderSec).join("") + "</details>";
+
+  if (any || maintAny) {
+    html += '<div class="filter-row"><button class="chip-btn bad-btn" id="ev-delete">🗑 删除所选</button>' +
       '<span class="muted-note" id="ev-count">未勾选</span></div>' +
       '<div id="ev-result"></div>';
   }
@@ -733,7 +785,7 @@ function renderEvolutionInto(box) {
           '<div class="bad-box">✗ 先勾选要删的条目</div>';
         return;
       }
-      if (!confirm("确定删除 " + checked.length + " 条？真源行会被删（git 回滚点可恢复）")) return;
+      if (!confirm("确定删除 " + checked.length + " 条？会从对应的文件里删掉这几行，删了不能撤销。")) return;
       const groups = {};
       checked.forEach(c => {
         const k = c.dataset.kind + "|" + c.dataset.proj;
@@ -827,15 +879,29 @@ function renderSysTab(which) {
         : '<div class="ok-box">✓ 四问齐，可以开工。</div>';
     };
   } else {
+    // ⛔ 这页原来只写「clone skills 仓库 → python install.py → python dashboard.py」——
+    //    对下载 exe 用的人**直接是错的**：他手上根本没有源码，也没装 Python。
+    //    绝大多数用户走的是 exe 那条路，所以先写它。
     const roots = DATA.root_status;
-    box.innerHTML = '<ol class="steps">' +
-      "<li>clone skills 仓库到新机器</li>" +
-      "<li><code>python -X utf8 install.py</code>（自动探测各根）</li>" +
-      "<li><code>python -X utf8 dashboard.py</code>（起服务开浏览器）</li></ol>" +
-      '<table style="margin-top:10px"><thead><tr><th>根</th><th>路径</th><th>状态</th></tr></thead><tbody>' +
-      roots.map(r => "<tr><td>{" + esc(r.alias) + "}</td><td><code>" + esc(r.path || "— 未配置") + "</code></td><td>" + statusBadge(r.exists ? "ok" : "noroot") + "</td></tr>").join("") +
-      "</tbody></table>" +
-      '<p class="muted-note">机器：' + esc(DATA.machine_id) + " · 团队版预留：roots.json 带 machine_id，多机数据分得开（网络同步 v0.2+ 另立项）</p>";
+    box.innerHTML =
+      "<h3>用 exe 的</h3>" +
+      '<ol class="steps">' +
+      "<li>把 <code>lingtaios.exe</code> 所在的<b>整个文件夹</b>拷到新机器" +
+      '<br><span class="muted-note">里面有你的配置、方法论文件和记下的坑。' +
+      "只拷 exe 等于重新开始。</span></li>" +
+      "<li>双击它，接着用</li></ol>" +
+      "<h3>用源码的</h3>" +
+      '<ol class="steps">' +
+      "<li>clone 仓库到新机器</li>" +
+      "<li><code>python -X utf8 install.py</code></li>" +
+      "<li><code>python -X utf8 dashboard.py</code></li></ol>" +
+      '<p class="muted-note">项目本身留在原机（业务数据不搬）；方法体系跟着走。</p>' +
+      // 别名表是内部概念（{SKILLS}/{NEXUS}/{D}/{HOME}），收起来
+      '<details style="margin-top:12px"><summary><span class="muted-note">' +
+      "扫描位置（这台机器上灵台会去哪些目录找项目）</span></summary>" +
+      '<table style="margin-top:10px"><thead><tr><th>位置</th><th>路径</th><th>状态</th></tr></thead><tbody>' +
+      roots.map(r => "<tr><td>" + esc(r.alias) + "</td><td><code>" + esc(r.path || "— 未配置") + "</code></td><td>" + statusBadge(r.exists ? "ok" : "noroot") + "</td></tr>").join("") +
+      "</tbody></table></details>";
   }
 }
 
@@ -920,7 +986,7 @@ function renderNewProject() {
       const out = document.getElementById("np-result");
       if (d.ok) {
         out.innerHTML = '<div class="ok-box">✓ 装好了：<code>' + esc(d.path) + "</code><br>" +
-          "六器官 " + (d.organs ? d.organs.length : 9) + " 件 + 02_状态已生成，已登记进装配图<br>" +
+          "六器官 " + (d.organs ? d.organs.length : 9) + " 个文件已写入 brain\\ 目录，状态也生成好了<br>" +
           '<pre>' + esc((d.generator && (d.generator.out || d.generator.error)) || "") + "</pre>" +
           '<button class="chip-btn" id="np-refresh">去项目页看卡片</button></div>';
         document.getElementById("np-refresh").onclick = () => {
