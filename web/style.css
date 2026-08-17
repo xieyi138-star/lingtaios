@@ -177,7 +177,19 @@ h3 { font-size: 14.5px; margin: 0 0 8px; }
 .tile.bad  .tile-num { color: var(--bad); }
 .tile-label { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-/* ── 「怎么开工」卡 ── */
+/* 可点的统计格子：数字本身就是入口（「经验库 N」点进坑库）。
+   给出手型和悬停反馈，否则用户不知道它能点。 */
+.tile.clickable { cursor: pointer; transition: all .15s ease; }
+.tile.clickable:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+/* 侧栏底部的反馈出口：低调，不跟导航抢，也不打断首页正文 */
+.dev-feedback {
+  display: block; margin-top: 8px; font-size: 12px;
+  color: var(--muted); text-decoration: none;
+}
+.dev-feedback:hover { color: var(--accent); text-decoration: underline; }
+
+/* ── 「项目开工说明」卡 ── */
 .start-card {
   background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 9%, transparent), color-mix(in srgb, var(--accent2) 5%, transparent) 40%, var(--panel) 75%);
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-soft));

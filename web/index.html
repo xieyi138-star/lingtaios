@@ -32,10 +32,19 @@
   </div>
   <button class="nav-btn" data-page="home">首页</button>
   <button class="nav-btn" data-page="projects">项目库</button>
+  <!-- 设置以前**没有任何常驻入口**，只能从首页正文里那行链接进去：人在项目库页
+       想改个设置，得先回首页。导航是它该待的地方。
+       坑库仍然不进导航——它的入口是首页那个「经验库 N」大格子，点数字就进去，
+       数字和它的动作合在一处，比在侧栏再挂一项更省。 -->
+  <button class="nav-btn" data-page="system">设置</button>
   <button class="nav-btn" id="theme-toggle">🌙 墨色</button>
   <div class="nav-dev">
     <span class="dev-label">开发者 VX</span>
     <span class="dev-row"><b id="dev-wx">nexusaistart</b><button type="button" class="dev-copy" id="dev-copy">复制</button></span>
+    <!-- 零遥测 = 有没有人在用你永远不知道。唯一诚实的办法是给一个用户自愿的出口。
+         它属于「联系方式」这个角落，不该夹在首页的告警和项目列表中间。
+         没跑起来过任何项目时不显示——没被帮到过就问「帮到你了吗」，答案没有信息量。 -->
+    <a class="dev-feedback" id="nav-feedback" href="#" target="_blank" rel="noopener" hidden>这东西帮到你了？说一声 →</a>
   </div>
   <div class="nav-foot" id="nav-foot"></div>
 </aside>

@@ -321,12 +321,16 @@ function renderHome() {
     '</svg><div class="ring-num"><b>' + active.length + "</b><span>/ " + DATA.projects.length +
     " 已装系统</span></div></div>";
   const tiles = [
-    ["告警项目", String(alarmProjects.length), alarmProjects.length ? "warn" : "good"],
-    ["项目总数", String(DATA.projects.length), "good"],
-    ["经验库", String(DATA.pitfall.rows.length), "good"],
+    ["告警项目", String(alarmProjects.length), alarmProjects.length ? "warn" : "good", ""],
+    ["项目总数", String(DATA.projects.length), "good", ""],
+    // 「经验库 N」这个数字本身就是坑库的入口：点它进去查坑/记坑。
+    // ⛔ 以前数字在这儿、动作在下面一行「🧠 经验库 84 条 · 查坑/记坑 · 设置 · 说一声」，
+    //    同一屏把条数说了两遍，而那一行还夹在告警和项目列表中间。
+    ["经验库 · 点开查坑/记坑", String(DATA.pitfall.rows.length), "good", "h-tile-pitfall"],
   ];
   let html = '<div class="hero">' + ring + tiles.map(t =>
-    '<div class="tile ' + t[2] + '"><div class="tile-num">' + esc(t[1]) + '</div><div class="tile-label">' + esc(t[0]) + "</div></div>"
+    '<div class="tile ' + t[2] + (t[3] ? " clickable" : "") + '"' + (t[3] ? ' id="' + t[3] + '"' : "") +
+    '><div class="tile-num">' + esc(t[1]) + '</div><div class="tile-label">' + esc(t[0]) + "</div></div>"
   ).join("") + "</div>";
 
   /* ⛔ 这里不放任何「复制开工指令」的按钮。
@@ -338,7 +342,7 @@ function renderHome() {
        那份带这台机器上的真实绝对路径。首页只负责告诉他去哪点。 */
   // ⛔ 标题原来是「今日开工」——它承诺了一个**时间**，而这张卡跟今天没关系，
   //    它就是入口；返回的用户也不是「今天才开工」。改成卡里内容真正在回答的那个问题。
-  html += '<div class="section card start-card"><h2>怎么开工</h2>' +
+  html += '<div class="section card start-card"><h2>项目开工说明</h2>' +
     // 「红绿灯全绿 / 收窗 / 分段落盘」都是自家说法，第一次来的人看不懂。
     // 句子按「删掉它对方的判断会变吗」删过一轮：去掉「下面任意」「详情页」
     // 「指令」「直接开工」「每做完一段」——删了都不改变他下一步怎么做。
@@ -375,21 +379,12 @@ function renderHome() {
     html += '<div class="section"><h2>⚠ 有告警的项目</h2><div class="cards">' +
       alarmProjects.map(slimCard).join("") + "</div></div>";
   }
-  html += '<div class="section" style="margin-bottom:14px"><span class="muted-note">' +
-    '🧠 经验库 <b>' + esc(ev.total_pitfalls || DATA.pitfall.rows.length) + '</b> 条' +
-    (ev.new_this_week ? '（本周 +' + esc(ev.new_this_week) + "）" : "") +
-    ' · <a href="#" id="h-goto-pitfall">查坑/记坑</a>' +
-    ' · <a href="#" id="h-goto-sys">设置</a>' +
-    // 零遥测意味着「有没有人在用」你永远不知道。唯一诚实的办法是给一个**用户自愿**的
-    // 出口——不采集、不追踪，他愿意才点。METRICS.md 里写的「用户自愿信号」就是这个，
-    // 之前只写在文档里没做出来。
-    // ⛔ 但它以前从首跑第一屏就在了：一个字都没用过就问「帮到你了吗」，既尴尬，
-    //    也把唯一的需求信号口糟蹋了——那时点进来的人根本没被帮到过。
-    //    要等他真跑起来一个项目（状态生成过）再问，答案才有信息量。
-    ((DATA.projects || []).some(p => p.state === "generated")
-      ? ' · <a href="' + REPO_URL + '/discussions" target="_blank" rel="noopener">这东西帮到你了？说一声 →</a>'
-      : "") +
-    "</span></div>";
+  /* ⛔ 这里原来有一行「🧠 经验库 84 条 · 查坑/记坑 · 设置 · 说一声 →」，
+     夹在告警和项目列表中间。三样东西各自都放错了地方：
+       · 条数——顶部大格子里已经有一个「经验库 84」，同一屏说了两遍；
+       · 查坑/记坑、设置——它们是**导航**，被塞进正文只因为侧栏里没有它们的入口；
+       · 说一声——反馈链接，不该打断「告警 → 我的项目」这条视线。
+     现在：数字和动作合并进那个大格子（点它进坑库）、设置进侧栏、反馈去侧栏底部。 */
   const rest = DATA.projects.length - active.length;
   html += '<div class="section"><h2>进行中的项目（' + active.length + '）</h2><div class="cards">' +
     active.slice(0, 6).map(slimCard).join("") + "</div>" +
@@ -411,8 +406,8 @@ function renderHome() {
   document.getElementById("h-newproj").onclick = () => go("newproj");
   const hAdd = document.getElementById("h-addproj");
   if (hAdd) hAdd.onclick = () => { go("projects"); addProjectHere(); };
-  document.getElementById("h-goto-pitfall").onclick = e => { e.preventDefault(); go("pitfall"); };
-  document.getElementById("h-goto-sys").onclick = e => { e.preventDefault(); go("system"); };
+  const tp = document.getElementById("h-tile-pitfall");
+  if (tp) tp.onclick = () => go("pitfall");
   main.querySelectorAll(".h-goto-projects").forEach(a => {
     a.onclick = e => { e.preventDefault(); go("projects"); };
   });
@@ -1680,6 +1675,13 @@ fetch("data.json")
     //    「三处一致」检查兜着——检查只拦得住不一致，拦不住三处一起忘。
     const vb = document.getElementById("ver-badge");
     if (vb) vb.textContent = d.version ? "v" + d.version : "";
+    // 反馈出口：跑起来过至少一个项目才露出来。没被帮到过就问「帮到你了吗」，
+    // 既尴尬，也把唯一的需求信号口糟蹋了——那是零遥测下仅有的信号来源。
+    const fb = document.getElementById("nav-feedback");
+    if (fb && (d.projects || []).some(p => p.state === "generated")) {
+      fb.href = REPO_URL + "/discussions";
+      fb.hidden = false;
+    }
     // 侧栏原来印着「生成时间 + machine_id」。时间首页已经有了；machine_id 是给
     // 多机分数据用的内部标识，用户看了不知道要拿它干什么——去掉，侧栏留给版本号。
     document.getElementById("nav-foot").textContent = "";

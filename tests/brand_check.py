@@ -55,9 +55,13 @@ checks = [
     ("开发者 VX 在侧栏", "开发者 VX" in html and "nexusaistart" in html),
     ("复制是真 button", '<button type="button" class="dev-copy"' in html),
     ("复制功能已接线", 'dev-copy' in js and 'copyText' in js),
-    ("导航仍是 2 项（坑库已撤回）", html.count('class="nav-btn" data-page=') == 2),
+    # 导航 = 首页 / 项目库 / 设置。设置以前**没有常驻入口**，只能从首页正文里
+    # 一行链接进去——人在项目库页想改设置得先回首页。它是用户自己的东西，
+    # 该在导航里。这条真正要守的是下面那句「坑库不在侧栏」（那是机器的索引）。
+    ("导航是 3 项（首页/项目库/设置）", html.count('class="nav-btn" data-page=') == 3),
     ("坑库不在侧栏", 'data-page="pitfall"' not in html),
-    ("首页查坑链接仍在", "h-goto-pitfall" in js),
+    # 坑库的入口是首页那个「经验库 N」大格子：点数字进去，数字和动作合在一处
+    ("首页经验库格子可点进坑库", "h-tile-pitfall" in js and "tile.clickable" in css),
     ("预览页没被打包进去", True),
 ]
 for n, ok in checks:
