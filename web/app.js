@@ -329,35 +329,27 @@ function renderHome() {
     '<div class="tile ' + t[2] + '"><div class="tile-num">' + esc(t[1]) + '</div><div class="tile-label">' + esc(t[0]) + "</div></div>"
   ).join("") + "</div>";
 
-  /* ⛔ 这里原来是「📋 复制开窗三句话」——首页最显眼的主按钮，复制出来的却是：
-       「2. 读本项目 brain\01_法典.md」。**「本项目」是哪个？没说**，brain\... 是个
-       没有根的相对路径。粘给 AI，它只能反问「哪个项目」或者在当前目录瞎猜。
-       （顺带它叫「三句话」，实际四行。）
-       开工这件事**必须绑定到一个具体项目**：项目详情页的「继续做」指令给的是完整
-       绝对路径，那份才能用。所以首页这个位置改成「接着上次那个项目干」——
-       挑最近动过的一个，名字写在按钮上，用户点之前就看得见是哪个。
-       一个项目都没有时不渲染它：没有项目就没有「开工」这回事。 */
-  const recent = active.slice().sort((a, b) =>
-    String(b.state_at || b.handoff_mtime || "").localeCompare(
-      String(a.state_at || a.handoff_mtime || "")))[0];
+  /* ⛔ 这里不放任何「复制开工指令」的按钮。
+       开工必须绑定到**一个具体项目**，而首页不知道用户今天想开哪个——
+       原来那个「📋 复制开窗三句话」就是这么坏的：它复制出「读本项目
+       brain\01_法典.md」，「本项目」是哪个没说，是个没有根的相对路径，
+       粘给 AI 只能反问或瞎猜。改成「猜最近动过的那个」仍然是猜。
+       正确的入口本来就在：点项目卡 → 详情页「复制『继续做』指令」，
+       那份带这台机器上的真实绝对路径。首页只负责告诉他去哪点。 */
   html += '<div class="section card start-card"><h2>今日开工</h2>' +
     // 「红绿灯全绿 / 收窗 / 分段落盘」都是自家说法，第一次来的人看不懂。
-    '<p class="muted-note">' + (recent
-      ? "点「复制」→ 粘给任何 AI → 直接开工。不用记得收尾，AI 每做完一段就把进度写回文件。"
+    '<p class="muted-note">' + (active.length
+      ? "点下面任意项目卡 → 详情页「📋 复制「继续做」指令」→ 粘给任何 AI 直接开工。" +
+        "不用记得收尾，AI 每做完一段就把进度写回文件。"
       : "还没有项目。先建一个，或者把电脑上已经在做的加进来。") + "</p>" +
     '<div class="filter-row">' +
-    (recent
-      ? '<button class="chip-btn primary" id="h-open-btn" data-path="' + esc(recent.path) +
-        '">📋 继续做：' + esc(recent.name) + "</button>"
-      : "") +
     '<button class="chip-btn accent-btn" id="h-newproj">＋ 新项目</button>' +
     // 「新项目」是从零建一个；「添加已有」是把电脑上已经存在的项目收进来。
     // 两回事，用户想收录已有项目时不该只能去项目页找
     '<button class="chip-btn" id="h-addproj">📂 添加已有项目</button>' +
     // 「深查（重算全部真源）」——用户不知道什么叫真源，他只想让页面反映硬盘上的实况
     '<button class="chip-btn" id="h-refresh">🔄 重新扫描</button></div>' +
-    '<p class="muted-note">数据更新于 ' + esc(DATA.generated_at) + "</p>" +
-    '<p class="muted-note" id="h-note"></p></div>';
+    '<p class="muted-note">数据更新于 ' + esc(DATA.generated_at) + "</p></div>";
 
   const ev = DATA.evolution || {};
   const staleN = (ev.stale_handoffs || []).length;
@@ -435,21 +427,6 @@ function renderHome() {
       b.disabled = false; b.textContent = "✗ 扫描失败";
     }
   };
-  const openBtn = document.getElementById("h-open-btn");
-  if (openBtn) {
-    openBtn.onclick = async () => {
-      const note = document.getElementById("h-note");
-      note.textContent = "取指令中…";
-      // 复制的是**这个项目**的「继续做」指令（含这台机器上的真实绝对路径），
-      // 跟点进项目详情页再复制拿到的是同一份。
-      const r = await post("api/project_detail", { path: openBtn.dataset.path });
-      const d = r.detail || r;
-      if (!d.resume) { note.textContent = "✗ 取不到指令，点进项目页再试"; return; }
-      note.textContent = (await copyText(d.resume))
-        ? "✓ 已复制——打开任意 AI，粘贴，开工。"
-        : "✗ 复制失败，点进项目页手动选";
-    };
-  }
 }
 
 /* ---------- 项目页：全部可点；装系统的在前，未装的折叠区同样可点 ---------- */

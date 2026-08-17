@@ -158,13 +158,10 @@ def api_templates():
         "（要接着做某个具体项目：打开灵台 → 点那个项目 → 「复制『继续做』指令」，"
         "那份带着这台机器上的真实路径）"
     ) % card
-    close_text = (
-        "按收窗四步收：①销账（回状态源标死已完成项）②教训进坑库/法典（不记流水账）"
-        "③C 类过程标到期 ④更新 brain\\05_交接.md\n"
-        "收完%s 并报告告警" % _regen_cmd()
-    )
-    return {"ok": True, "open": open_text, "close": close_text,
-            "paths": {"card": card, "map": MAP}}
+    # ⛔ 这里以前还返回一份 close_text（收窗四步）。它在界面里**一次都没被用过**——
+    #    死代码。而且它同样犯了「brain\05_交接.md 没有根」的毛病。收窗那件事
+    #    已经写在「继续做」指令的最后一步里（带绝对路径），不需要第二份。
+    return {"ok": True, "open": open_text, "paths": {"card": card, "map": MAP}}
 
 
 def _sandbox_marker(roots):

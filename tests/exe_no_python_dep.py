@@ -122,11 +122,14 @@ def main():
         results.append(("而且给了 --regen 或界面按钮这条活路",
                         ("--regen" in resume) or ("重算状态" in resume)))
 
+        # 通用文案（设置 → 换机/我的文件 里那份）同样不许出现 python 命令，
+        # 也不许再混进 `brain\...` 这种没有根的相对路径——那是开不了工的东西。
         st, t = post("api/templates", {})
-        close = (t or {}).get("close", "")
-        results.append(("收窗模板里没有 python 命令" +
-                        ("" if "python" not in close.lower() else "（实际：%s）" % close[-90:]),
-                        st == 200 and "python" not in close.lower()))
+        op = (t or {}).get("open", "")
+        results.append(("拿到了通用文案（%d 字）" % len(op), st == 200 and len(op) > 40))
+        results.append(("通用文案里没有 python 命令", "python" not in op.lower()))
+        results.append(("通用文案里没有没根的 brain\\ 相对路径",
+                        "brain\\01_" not in op and "brain\\05_" not in op))
     finally:
         if proc:
             proc.terminate()
