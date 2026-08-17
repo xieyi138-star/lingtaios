@@ -11,6 +11,7 @@
 原则：只读真源，渲染即读，零副本。data.json 是生成物，人一个数字都不许手写。
 """
 import argparse
+import glob
 import io
 import json
 import os
@@ -370,9 +371,19 @@ def api_add_pitfall(data):
     prefix = {"判定侧": "P", "协作与派工": "W", "状态与文档": "S", "运行时与系统": "R", "工具坑": "T"}[section]
     nums = [int(r["编号"][1:]) for r in rows if re.fullmatch(r"%s\d+" % prefix, r.get("编号", ""))]
     code = "%s%d" % (prefix, max(nums) + 1 if nums else 1)
-    new_row = "| %s | %s | %s | %s | 1 | %s | %s |" % (
+    # 末尾的「贡献者」留空 = 本库主人自己记的。有值 = 社区贡献并被采纳的。
+    # 给贡献者的回报是**署名**不是钱：实证表明金钱激励会挤出内在动机（小额挤得最狠），
+    # 而地位/声誉动机反过来会增强它——署名成本为零，也不会引来刷量的人。
+    #
+    # ⛔ 列数要跟着**这个文件当前的表头**走，不能写死。
+    #    老用户的坑库是 7 列（没有「贡献者」），升级后如果按 8 列写，
+    #    新行会比表格宽一格，整张表在解析和渲染上都会错位。
+    #    这类「新版本写坏老数据」的兼容问题，装了才发现就晚了。
+    has_contrib = "贡献者" in (rows[0].keys() if rows else {}) or "| 贡献者 |" in text
+    new_row = "| %s | %s | %s | %s | 1 | %s | %s |%s" % (
         code, pit.replace("|", "/"), fix.replace("|", "/"), source.replace("|", "/"),
-        invalid_when.replace("|", "/"), time.strftime("%Y-%m-%d"))
+        invalid_when.replace("|", "/"), time.strftime("%Y-%m-%d"),
+        "  |" if has_contrib else "")
     lines = text.split("\n")
     sec_idx = next(i for i, ln in enumerate(lines) if ln.startswith("## %s" % section))
     nxt = next((i for i in range(sec_idx + 1, len(lines))
@@ -1471,9 +1482,20 @@ def api_project_detail(data):
     ]
     if trace_step:
         steps.append("4. %s" % trace_step)
-    steps.append("4. 每段回复第一行打证据头；不可逆动作先出施工图等我拍板" if trace_step is None else
-                 "5. 每段回复第一行打证据头；不可逆动作先出施工图等我拍板")
-    steps.append(("5. 收工时：%s" if trace_step is None else "6. 收工时：%s") % close_step)
+    n = len(steps)          # 已有几步，后面接着编号，别写死 4/5/6
+    steps.append("%d. 每段回复第一行打证据头；不可逆动作先出施工图等我拍板" % n)
+    # ⛔ 「用的人越多方法越准」这句话，瓶颈从来不在人愿不愿意，而在**麻烦**：
+    #    判断一条坑通不通用、写成规范格式、开个 issue——90% 的人不会为别人多走这几步
+    #    （90-9-1 定律）。但灵台的用户不是一个人，是「人 + AI」，而 AI 不嫌麻烦。
+    #    所以把判断和起草都交给 AI，人只剩下「看一眼、点一下」。
+    draft = os.path.join(path, "贡献草稿.md")
+    steps.append(
+        "%d. 这次要是踩了新坑：按「一句话坑 / 防法（照做即可）/ 失效判据（防的事被结构性"
+        "消除即删）」记进本项目的经验记录。记完再自问一句——**换一个项目、换一套技术栈，"
+        "这条还成立吗？** 成立的，另外追加一份到 %s（同样三段格式），收工时告诉我"
+        "「有几条可以贡献回主库」。只在本项目成立的不用写，留着自己用就行。"
+        % (n + 1, draft))
+    steps.append("%d. 收工时：%s" % (n + 2, close_step))
     detail["resume"] = "\n".join(steps)
     # 通用件落后检测（v0.7 升级传播）
     scaffold = os.path.join(REPO, "project-delivery", "scaffold")
@@ -1972,6 +1994,35 @@ def serve(open_browser):
         print("\n已停。")
 
 
+def _sweep_stale_unpack():
+    """清掉自己以前留下的解包垃圾（PyInstaller onefile 的 _MEIxxxx 临时目录）。
+
+    单文件 exe 每次启动会把自己解压到临时目录，正常退出会清理——**但被强杀或崩溃时不会**。
+    实测本机积压了 319 个、9.66 GB。用户那边同样会发生：任务管理器结束进程一次、
+    崩一次，就留下约 30 MB，日积月累。
+
+    ⛔ 只删「不是本次这个」且「超过一天没动过」的：正在被别的实例占用的目录删不掉，
+       Windows 会抛异常，直接跳过——宁可留着也不能删掉别人正在用的。
+    """
+    if not BUNDLE:
+        return
+    try:
+        import tempfile as _tf
+        now, cut = time.time(), 24 * 3600
+        mine = os.path.normcase(os.path.abspath(BUNDLE))
+        for p in glob.glob(os.path.join(_tf.gettempdir(), "_MEI*")):
+            if not os.path.isdir(p) or os.path.normcase(os.path.abspath(p)) == mine:
+                continue
+            try:
+                if now - os.path.getmtime(p) < cut:
+                    continue
+                shutil.rmtree(p, ignore_errors=False)
+            except OSError:
+                pass          # 正被占用/没权限：跳过，不出声也不冒险
+    except Exception:
+        pass                  # 清垃圾失败绝不能影响启动
+
+
 def _seed_repo():
     """exe 首跑：把出厂的方法论真源从只读的 BUNDLE 落到 exe 旁边（REPO = HERE）。
 
@@ -2030,6 +2081,7 @@ def main():
                 except OSError:
                     pass
         _seed_repo()
+        _sweep_stale_unpack()
         if not os.path.isfile(ROOTS_FILE):
             home = os.path.expanduser("~")
             roots = {

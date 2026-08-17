@@ -50,16 +50,22 @@ SEED = ["00_宪法.md", "01_法典.md", "03_在建.md", "04_待办池.md", "05_�
 killport()
 work = tempfile.mkdtemp(prefix="manifest_")
 shutil.copy2(EXE, os.path.join(work, "lingtaios.exe"))
-before = set(glob.glob(r"D:\Temp\_MEI*"))
+# ⛔ 两处写死过，都咬过人：
+#   ① 路径写死 D:\Temp —— 换台机器 temp 不在那儿，这条就永远找不到 bundle
+#   ② sorted() 是**按名字**排字符串，不是按时间。实测本机积压过 319 个 _MEI 目录
+#      （taskkill 强杀不清理），名字最小的那个是几天前的旧版，于是拿旧包跟新真源比，
+#      报「内容不同」——量具自己错了，却看起来像产品坏了（坑库 P1）。
+_MEIGLOB = os.path.join(tempfile.gettempdir(), "_MEI*")
+before = set(glob.glob(_MEIGLOB))
 subprocess.Popen([os.path.join(work, "lingtaios.exe"), "--no-browser"], cwd=work, stdout=DN, stderr=DN)
 up = False
 for _ in range(150):
     s = socket.socket(); s.settimeout(0.4); up = s.connect_ex(("127.0.0.1", 8765)) == 0; s.close()
     if up: break
     time.sleep(0.4)
-new = sorted(set(glob.glob(r"D:\Temp\_MEI*")) - before)
+new = sorted(set(glob.glob(_MEIGLOB)) - before, key=os.path.getmtime, reverse=True)
 bundle = new[0] if new else None
-print("exe 已展开到:", bundle, "\n")
+print("exe 已展开到:", bundle, "（新出现 %d 个，取最新的）\n" % len(new))
 
 ok = miss = diff = 0
 print("=" * 88)

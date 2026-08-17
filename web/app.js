@@ -587,6 +587,9 @@ function sharePitfall(p, code) {
     "## 出处",
     p.source || "（未填）",
     "",
+    "## 署名（会写进主库的「贡献者」列，留空则匿名收录）",
+    "",
+    "",
     "---",
     "由灵台从本地坑库导出" + (code ? "（本地编号 " + code + "）" : "") + "。",
     "我确认这条**不含**任何涉密信息（IP / 密钥 / 客户数据）。",
@@ -594,6 +597,50 @@ function sharePitfall(p, code) {
   const url = REPO_URL + "/issues/new?labels=" + encodeURIComponent("坑库贡献") +
     "&title=" + encodeURIComponent(title) + "&body=" + encodeURIComponent(body);
   window.open(url, "_blank", "noopener");
+}
+
+/* ---------- 导出「我的踩坑档案」 ----------
+   用户不会为了帮你而公开，会为了**自己**而公开——他记的坑是踩过的实战证据，
+   是能拿出去的专业履历。所以给他一份能直接发出去的东西，他图专业形象，
+   顺带把方法库带出去。（Obsidian Publish 就是这个逻辑：用户想要的是发布本身。）
+   ⚠️ 局限：现在识别不出「内置的」和「他自己记的」，所以导出的是整个库并如实标注。
+      要精确区分，得在首跑时把内置编号集合存下来——等有人真的在用了再做。 */
+function exportPitfallArchive() {
+  const rows = (DATA.pitfall && DATA.pitfall.rows) || [];
+  const secs = (DATA.pitfall && DATA.pitfall.sections) || [];
+  const nProj = (DATA.projects || []).length;
+  const L = [];
+  L.push("# 我的踩坑档案");
+  L.push("");
+  L.push("> 用灵台管着 " + nProj + " 个项目，经验库 " + rows.length + " 条。");
+  L.push("> 每条都带**防法**和**失效判据**——防的事被结构性解决了就退休，");
+  L.push("> 不是一个只增不减、最后没人看的清单。");
+  L.push("");
+  for (const s of secs) {
+    const inSec = rows.filter(r => r.__section === s.name);
+    if (!inSec.length) continue;
+    L.push("## " + s.name + "（" + inSec.length + " 条）");
+    L.push("");
+    for (const r of inSec) {
+      L.push("**" + (r["编号"] || "") + "　" + (r["一句话坑"] || "") + "**");
+      L.push("");
+      L.push("- 防法：" + (r["防法（照做即可）"] || ""));
+      L.push("- 失效判据：" + (r["失效判据"] || ""));
+      if (String(r["贡献者"] || "").trim()) L.push("- 贡献者：" + r["贡献者"]);
+      L.push("");
+    }
+  }
+  L.push("---");
+  L.push("");
+  L.push("方法库来自 [灵台 LingTai OS](" + REPO_URL + ")：让任何 AI 按验证过的方法做事，");
+  L.push("而不是按它猜的。本档案含灵台内置的方法论坑库与我自己补充的条目。");
+  const blob = new Blob([L.join("\n")], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "我的踩坑档案.md";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 /* ---------- 坑库：搜索 + 分区 + 分页 ---------- */
@@ -609,7 +656,8 @@ function renderPitfall() {
     '<div class="filter-row"><input id="pit-q" type="search" placeholder="搜索坑或防法">' +
     '<select id="pit-sec"><option value="">全部分区</option>' +
     sections.map(s => '<option value="' + esc(s.name) + '">' + esc(s.name) + "（" + s.count + "）</option>").join("") +
-    '</select><button class="chip-btn accent-btn" id="pit-add">＋ 记一条坑</button></div>' +
+    '</select><button class="chip-btn accent-btn" id="pit-add">＋ 记一条坑</button>' +
+    '<button class="chip-btn" id="pit-export" title="导出成一份可以直接发出去的 markdown">📤 导出档案</button></div>' +
     '<div id="pit-form-wrap" style="display:none"><div class="form-grid">' +
     '<label>分区<select id="pf-section">' +
     sections.map(s => '<option>' + esc(s.name) + "</option>").join("") + "</select></label>" +
@@ -630,6 +678,7 @@ function renderPitfall() {
     const w = document.getElementById("pit-form-wrap");
     w.style.display = w.style.display === "none" ? "" : "none";
   };
+  document.getElementById("pit-export").onclick = exportPitfallArchive;
   document.getElementById("pf-go").onclick = async () => {
     const payload = {
       section: document.getElementById("pf-section").value,
