@@ -105,16 +105,41 @@ def main():
         results.append(("B 升级后台账跟着更新（下次不会重复升）",
                         (state()["files"].get(key) or "") == md5(target)))
 
-        # ── C 台账里没有的（老装机） → 不动，挂到待定 ───────────────────
+        # ── C 台账里没有、但等于某个历史版本发出去的原样 → 照样自动升级 ─────
+        # 这是**旧版装机**的情形（v0.2.0 那批人没有台账）。以前这一档叫「待定」，
+        # 会挂到界面上问用户「这份文件要不要换新版」——而他根本不知道
+        # scaffold\05_交接.md 是什么。⛔ 分不清是系统的问题，不该转嫁给用户。
+        # ⛔ 真源里必须有**已发布版本**的指纹，否则那一版装机的用户升级时判不出
+        #    「他改过没有」，就又会退回到「挂到界面上问他」——而那是他答不了的问题。
+        #    （指纹表随 exe 打进包里，不落盘，所以这条查真源不查 exe 旁边。）
+        src_sh = os.path.join(BC, "release", "shipped_hashes.json")
+        vers = list(json.load(io.open(src_sh, encoding="utf-8"))) if os.path.isfile(src_sh) else []
+        results.append(("真源里记着已发布版本的出厂指纹（%s）" % "、".join(sorted(vers)[:4]),
+                        "0.2.0" in vers))
+        shipped = os.path.join(app, "shipped_hashes.json")
+        hist = json.load(io.open(shipped, encoding="utf-8")) if os.path.isfile(shipped) else {}
         write(target, old)
         st = state()
-        st["files"].pop(key, None)              # 假装这是 v0.2.0 时代装的
-        st["pending"] = []
+        st["files"].pop(key, None)              # 假装这是旧版装的：台账里没有它
+        with io.open(manifest, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+        hist["0.0.0-test"] = {key: md5(target)}  # 把 old 登记成「某版发出去的原样」
+        with io.open(shipped, "w", encoding="utf-8") as f:
+            json.dump(hist, f, ensure_ascii=False)
+        bump()
+        results.append(("C 旧版装的、没改过的 → 自动升级（不再问用户）",
+                        read(target) == factory))
+        results.append(("C 不再产生「待定」这一档", "pending" not in state()))
+
+        # ── D 台账里没有、也不等于任何历史原样 → 他改过，留着不动 ───────────
+        mine2 = factory + b"\n<!-- I EDITED THIS ON AN OLD VERSION -->\n"
+        write(target, mine2)
+        st = state()
+        st["files"].pop(key, None)
         with io.open(manifest, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False)
         bump()
-        results.append(("C 认不出来历的文件没被动（内容逐字节不变）", read(target) == old))
-        results.append(("C 而且挂进 pending，等人裁决", key in (state().get("pending") or [])))
+        results.append(("D 旧版装的、改过的 → 一个字都不动", read(target) == mine2))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

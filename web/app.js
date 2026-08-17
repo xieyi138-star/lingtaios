@@ -364,9 +364,10 @@ function renderHome() {
     html += '<div class="section"><h2>🔴 先看这里</h2><ul>' +
       gone.map(p => "<li>📴 够不着：<code>" + esc(p) +
         "</code>——外接硬盘没插？网络盘断了？目录挪走了？（它还记在你的项目清单里）</li>").join("") +
-      // 提到哪儿就得能点过去：写「见设置→进化审计」却不给链接，等于让人自己找路
+      // 提到哪儿就得能点过去。⛔ 这条以前指向「设置→进化审计」，那页已经没了——
+      //    而且要动手的地方本来就在项目库：去那个项目里接着做，交接自然就更新了。
       (staleN ? "<li>🟡 有 " + staleN + " 个项目的交接超 7 天没更新——" +
-        '<a href="#" id="h-goto-evolve">去看看 →</a></li>' : "") +
+        '<a href="#" class="h-goto-projects">去项目库看 →</a></li>' : "") +
       "</ul></div>";
   }
   if (alarmProjects.length) {
@@ -405,8 +406,6 @@ function renderHome() {
   main.querySelectorAll(".h-goto-projects").forEach(a => {
     a.onclick = e => { e.preventDefault(); go("projects"); };
   });
-  const gev = document.getElementById("h-goto-evolve");
-  if (gev) gev.onclick = e => { e.preventDefault(); go("system"); };
   document.getElementById("h-refresh").onclick = async () => {
     const b = document.getElementById("h-refresh");
     b.disabled = true; b.textContent = "🔄 扫描中…";
@@ -784,7 +783,13 @@ function drawPitRows() {
     PIT_MAIN.length + '"><span class="muted-note">' +
     meta.filter(c => String(r[c] || "").trim()).map(c => esc(c) + "：" + esc(r[c])).join("　·　") +
     '</span>　<button class="chip-btn pit-share" data-i="' + i +
-    '" title="换个项目、换套技术栈还成立的，才该进主库">🌱 贡献回主库</button></td></tr>').join("");
+    '" title="换个项目、换套技术栈还成立的，才该进主库">🌱 贡献回主库</button>' +
+    /* 退休一条坑，该发生在**你正看着它**的时候，而不是在另一个页面上勾一张清单。
+       ⛔ 措辞不用「删除」：用户看到「删除」第一反应是「我的文件会不会没了」。
+          说清楚只动这一行、别的什么都不碰。 */
+    '　<button class="chip-btn pit-retire" data-i="' + i +
+    '" title="它防的事已经不可能发生了，就让它退休">这条不用了</button>' +
+    '<span class="pit-retire-box" data-i="' + i + '"></span></td></tr>').join("");
   document.querySelectorAll("#pit-table .pit-row").forEach(tr => {
     tr.onclick = () => {
       const m = document.querySelector('#pit-table .pit-meta[data-i="' + tr.dataset.i + '"]');
@@ -801,230 +806,38 @@ function drawPitRows() {
       }, r["编号"]);
     };
   });
+  document.querySelectorAll("#pit-table .pit-retire").forEach(b => {
+    b.onclick = e => {
+      e.stopPropagation();
+      const r = shown[+b.dataset.i];
+      const box = document.querySelector('#pit-table .pit-retire-box[data-i="' + b.dataset.i + '"]');
+      box.innerHTML = "　让 <b>" + esc(r["编号"]) + "</b> 退休？" +
+        '<span class="muted-note">只去掉经验库里这一行，你的项目和文件一个都不动。</span>' +
+        ' <button class="chip-btn bad-btn pit-retire-yes">确定</button>' +
+        ' <button class="chip-btn pit-retire-no">取消</button>';
+      box.querySelector(".pit-retire-no").onclick = ev => { ev.stopPropagation(); box.innerHTML = ""; };
+      box.querySelector(".pit-retire-yes").onclick = async ev => {
+        ev.stopPropagation();
+        box.textContent = "　处理中…";
+        const res = await post("api/audit_delete", { kind: "pitfall", ids: [r["编号"]] });
+        if (!res.ok) { box.innerHTML = '　<span class="muted-note">✗ ' + esc(res.error) + "</span>"; return; }
+        reloadData(() => renderPitfall());
+      };
+    };
+  });
   document.getElementById("pit-count").textContent = "显示 " + shown.length + " / " + rows.length;
   document.getElementById("pit-more").style.display = rows.length > shown.length ? "" : "none";
   if (document.getElementById("pit-more").style.display === "none") pitLimit = PIT_PAGE;
   else if (pitLimit < rows.length) pitLimit += PIT_PAGE;
 }
 
-/* ---------- 进化审计（渲染进设置页 tab） ---------- */
-function renderEvolutionInto(box) {
-  const ev = DATA.evolution || {};
-  // 这一页分两层：上面是**你要处理的**，下面折叠的是**灵台自己的体检**。
-  // 混在一起的后果是：用户被一堆看不懂的「断头 / 双份 / 通用件落后」挡住，
-  // 找不到真正该他动手的那两三条。
-  const secs = [
-    ["候选删除（入库>3个月 且 触发≤1）", ev.candidates || [], "pitfall",
-      r => r["编号"] + " " + (r["一句话坑"] || "").slice(0, 50)],
-    ["C 类待办已到期", ev.expired_todos || [], "todo",
-      r => r["project"] + "： " + (r["line"] || "").slice(0, 80)],
-    ["🟡 交接超 7 天没更新", ev.stale_handoffs || [], "handoff",
-      r => r["project"] + "（" + r["days"] + " 天）"],
-  ];
-  // 下面这些是维护体系的人才看的：判据强度、待补判据、真源断头/双份、通用件落后。
-  const maintSecs = [
-    ["待补失效判据", ev.missing_invalid || [], "pitfall",
-      r => r["编号"] + " " + (r["一句话坑"] || "").slice(0, 50)],
-    ["🔄 通用件落后（体系升级后，项目可同步）", (DATA.sync || []).map(s => ({
-      编号: s.project, path: s.path, line: "落后：" + s.outdated.join("、") })), "sync", r => r["编号"] + "：" + r.line],
-  ];
-  // 判据强度：只读提示，不给勾选框——它不是「该删什么」，是「哪条判据当不了判据」。
-  // 混进下面那些可勾选清单会让人以为该删掉它们，正好判反。
-  const gs = ev.grade_stats || {};
-  const weak = ev.weak_criteria || [];
-  const gsTotal = (gs["强"] || 0) + (gs["中"] || 0) + (gs["弱"] || 0) + (gs["缺"] || 0);
-  let gradeHtml = "";
-  if (gsTotal) {
-    const badge = (t, n, cls) => n
-      ? '<span class="chip-btn ' + cls + '" style="cursor:default">' + t + " " + n + "</span> "
-      : "";
-    gradeHtml = '<div class="section"><h3>🧪 失效判据的强度（只读，供复核）</h3>' +
-      '<p class="muted-note">判据的唯一用处：<b>它成立时这条坑不可能再发生</b>——成立了就整行删。' +
-      "所以判据必须是能查真假的结构性状态，不能是「以后注意」。</p>" +
-      '<p style="margin:6px 0">' +
-      badge("强", gs["强"] || 0, "") + badge("中", gs["中"] || 0, "") +
-      badge("弱", gs["弱"] || 0, "bad-btn") + badge("缺", gs["缺"] || 0, "bad-btn") +
-      "</p>";
-    if (weak.length) {
-      const body = weak.map(r =>
-        '<p style="margin:6px 0"><b>' + esc(r["编号"]) + "</b> " +
-        esc((r["一句话坑"] || "").slice(0, 54)) +
-        '<br><span class="muted-note">判据：' + esc(r["失效判据"] || "（空）") +
-        "<br>可疑：" + esc(r.why) + "</span></p>").join("");
-      gradeHtml += weak.length > 5
-        ? "<details><summary><b>需要人看的 " + weak.length +
-          '</b><span class="muted-note"> · 点开</span></summary><div style="margin-top:8px">' +
-          body + "</div></details>"
-        : body;
-    } else {
-      gradeHtml += '<p class="muted-note">没有「弱」或「缺」的判据。' +
-        "「中」档也别全信——机械分档只看文本特征，判不了判据对不对。</p>";
-    }
-    gradeHtml += "</div>";
-  }
-
-  // 长清单默认折叠：几十条全平铺会把后面几张清单和「删除所选」全埋了，
-  // 实测整页 2 屏高——勾选框散在各处，按钮却在最底下，交互链是断的
-  const renderSec = ([title, items, kind, fmt]) => {
-    if (!items.length) return "";
-    const long = items.length > 8;
-    const body = items.map((r, i) =>
-      '<label class="q-label inline"><input type="checkbox" data-kind="' + kind + '" data-id="' +
-      esc(r["编号"] || r["project"] || i) + '" data-proj="' + esc(r["path"] || "") + '"> ' +
-      esc(fmt(r)) + "</label>").join("");
-    return '<div class="section">' +
-      (long
-        ? "<details><summary><b>" + esc(title) + "（" + items.length + "）</b>" +
-          '<span class="muted-note"> · 点开逐条勾</span></summary>' +
-          '<div style="margin-top:8px">' + body + "</div></details>"
-        : "<h3>" + esc(title) + "（" + items.length + "）</h3>" + body) +
-      "</div>";
-  };
-
-  /* 升级传播：新版带来的方法论更新里，哪些没自动生效、为什么。
-     ⛔ 这一节只处理「认不出来历」的（v0.2.0 及更早装的，台账里没有）。
-        你**明确改过**的文件只报告、不给覆盖入口——那条红线不给开关。 */
-  const seedPending = ev.seed_pending || [];
-  const seedKept = ev.seed_kept || [];
-  let seedHtml = "";
-  if (seedPending.length || seedKept.length) {
-    seedHtml = '<div class="section"><h3>📦 灵台自带的文件，有新版了</h3>';
-    if (seedKept.length) {
-      seedHtml += '<p class="muted-note">这 ' + seedKept.length +
-        " 个你自己改过，所以<b>没动它</b>——你的改动优先：<br>" +
-        seedKept.map(k => "<code>" + esc(k) + "</code>").join("、") + "</p>";
-    }
-    if (seedPending.length) {
-      seedHtml += '<p class="muted-note">这 ' + seedPending.length +
-        " 个是旧版本装的，灵台认不出你有没有改过，所以没敢动。想换成新版就勾上——" +
-        "<b>换之前会在旁边留一份备份（.bak）</b>，反悔了能拿回来。</p>" +
-        seedPending.map((k, i) =>
-          '<label class="q-label inline"><input type="checkbox" class="seed-pick" data-k="' +
-          esc(k) + '" id="seed-' + i + '"> <code>' + esc(k) + "</code></label>").join("") +
-        '<div class="filter-row" style="margin-top:8px">' +
-        '<button class="chip-btn" id="seed-apply">换成新版</button>' +
-        '<span class="muted-note" id="seed-msg"></span></div>';
-    }
-    seedHtml += "</div>";
-  }
-
-  /* ⛔ 这里原来写「每周看一次」——给用户派了一件定期维护的活，他不会去做，
-     而且这一屏当时是设置页的默认页。现在它收在「要你裁决的」折叠区里，
-     没事根本不渲染；出现即有事，不用再要求谁定期来看。 */
-  let html = '<p class="muted-note">勾选 → 点删除，对应的记录会从文件里删掉。</p>';
-  let any = false;
-  for (const s of secs) {
-    if (!s[1].length) continue;
-    any = true;
-    html += renderSec(s);
-  }
-  if (!any) html += '<div class="ok-box">✓ 没有要你处理的——干净。</div>';
-
-  // ── 下面是灵台自己的体检，默认收起来。用户不维护这套体系，不该被它挡在前面 ──
-  const maintAny = maintSecs.some(s => s[1].length) ||
-    (ev.broken || []).length || (ev.identical_pairs || []).length;
-  const h2 = DATA.health || {};
-  html += '<details style="margin-top:14px"><summary><b>🔧 体系自检</b>' +
-    '<span class="muted-note"> · 灵台自己的一致性检查，一般不用管' +
-    (maintAny ? "（有 " + ((ev.broken || []).length + (ev.identical_pairs || []).length +
-      maintSecs.reduce((n, s) => n + s[1].length, 0)) + " 项）" : "（全清）") +
-    "</span></summary>" + gradeHtml +
-    '<div class="section"><h3>方法论真源在位：' + esc(h2.ok) + " / " +
-    esc(h2.applicable != null ? h2.applicable : h2.total) + "</h3>" +
-    ((ev.broken || []).map(m => "<p>断头：" + esc(m.path) + "</p>").join("") +
-     (ev.identical_pairs || []).map(p => "<p>同名双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</p>").join("") ||
-     '<p class="muted-note">没有断头或双份。</p>') +
-    '<p class="muted-note"><a href="#" id="ev-goto-method">这些文件在哪 →</a></p></div>' +
-    seedHtml + maintSecs.map(renderSec).join("") + "</details>";
-
-  if (any || maintAny) {
-    html += '<div class="filter-row"><button class="chip-btn bad-btn" id="ev-delete">🗑 删除所选</button>' +
-      '<span class="muted-note" id="ev-count">未勾选</span></div>' +
-      '<div id="ev-result"></div>';
-  }
-  box.innerHTML = html;
-  // 勾了几条要看得见——折叠之后更需要，否则不知道自己到底选了没有
-  /* ⛔ 这三处选择器必须排掉 .seed-pick。升级用的勾选框和「删除所选」的勾选框
-     长在同一个容器里，不排掉的话：勾了「换成新版」→ 计数把它算进去 →
-     点「🗑 删除所选」会拿它去调 audit_delete。两件事共用一个选择器就是这么出事的。 */
-  const PICKS = 'input[type="checkbox"]:not(.seed-pick)';
-  const evCount = () => {
-    const el = document.getElementById("ev-count");
-    if (!el) return;
-    const n = box.querySelectorAll(PICKS + ":checked").length;
-    el.textContent = n ? "已勾 " + n + " 条" : "未勾选";
-  };
-  box.querySelectorAll(PICKS).forEach(c => { c.onchange = evCount; });
-  evCount();
-  const seedBtn = document.getElementById("seed-apply");
-  if (seedBtn) {
-    seedBtn.onclick = async () => {
-      const files = [...box.querySelectorAll(".seed-pick:checked")].map(c => c.dataset.k);
-      const msg = document.getElementById("seed-msg");
-      if (!files.length) { msg.textContent = "先勾要换的文件"; return; }
-      seedBtn.disabled = true;
-      msg.textContent = "处理中…";
-      const r = await post("api/apply_seed_update", { files });
-      if (!r.ok) { seedBtn.disabled = false; msg.textContent = "✗ " + (r.error || "失败"); return; }
-      msg.textContent = "✓ 已换 " + r.updated.length + " 个（原件留在同目录的 .bak）" +
-        (r.failed.length ? "，失败 " + r.failed.length : "");
-      reloadData(() => renderEvolutionInto(box));
-    };
-  }
-  const gm = document.getElementById("ev-goto-method");
-  if (gm) {
-    gm.onclick = e => {
-      e.preventDefault();
-      // 「方法」tab 已经去掉了（那四篇是给 AI 读的文件，不是给人翻的网页），
-      // 这个链接改指到「换机 / 我的文件」——那里写着文件在哪、还能一键打开目录。
-      document.querySelectorAll(".stab").forEach(x =>
-        x.classList.toggle("active", x.dataset.s === "portable"));
-      renderSysTab("portable");
-    };
-  }
-  const delBtn = document.getElementById("ev-delete");
-  if (delBtn) {
-    delBtn.onclick = async () => {
-      const checked = [...box.querySelectorAll(PICKS + ":checked")];
-      if (!checked.length) {
-        document.getElementById("ev-result").innerHTML =
-          '<div class="bad-box">✗ 先勾选要删的条目</div>';
-        return;
-      }
-      if (!confirm("确定删除 " + checked.length + " 条？会从对应的文件里删掉这几行，删了不能撤销。")) return;
-      const groups = {};
-      checked.forEach(c => {
-        const k = c.dataset.kind + "|" + c.dataset.proj;
-        (groups[k] = groups[k] || []).push(c.dataset.id);
-      });
-      const out = document.getElementById("ev-result");
-      out.innerHTML = '<p><span class="spin"></span> 执行中…</p>';
-      for (const [k, ids] of Object.entries(groups)) {
-        const [kind, path] = k.split("|");
-        try {
-          if (kind === "sync") {
-            const r = await fetch("api/sync_project", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ path }),
-            });
-            const rj = await r.json();
-            out.innerHTML += "<p>" + (rj.ok ? "✓ " + kind + " 已同步 " + rj.synced + " 件" : "✗ " + esc(rj.error)) + "</p>";
-            continue;
-          }
-          const r = await fetch("api/audit_delete", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ kind, ids, path }),
-          });
-          const rj = await r.json();
-          out.innerHTML += '<p>' + (rj.ok ? "✓ 已删 " + rj.removed + " 条（" + kind + "）" : "✗ " + esc(rj.error)) + "</p>";
-        } catch (e) {
-          out.innerHTML += "<p>✗ " + esc(String(e)) + "</p>";
-        }
-      }
-      out.innerHTML += '<p class="muted-note">已重建数据，刷新页面即可。</p>';
-    };
-  }
-}
+/* renderEvolutionInto()（候选删除 / C 类到期 / 判据强度 / 待补判据 / 断头双份 /
+   通用件落后 + 一个「🗑 删除所选」批量按钮）整个删了。三条理由：
+     · 它们既不是用户能判的，也不是他想判的——那是维护这套体系的人的活；
+     · 「通用件落后」现在系统自己同步掉了（sync_probe），根本不该问；
+     · 一个摆着「删除」按钮的清单，用户第一反应是「我的文件会不会没了」。
+   真正需要保留的能力只有一个：让某一条坑退休。它现在长在坑库那一行上——
+   你正看着那条坑的时候点「这条不用了」，比在另一个页面勾清单诚实得多。 */
 
 /* ---------- 我的文件 ---------- */
 function renderSystem() {
@@ -1036,17 +849,14 @@ function renderSystem() {
          ——全是维护坑库和体系的人才看的；
        · 「🔧 体系自检」的标签自己写着**「一般不用管」**——那它凭什么占一屏。
      用户真要的只有两件：**我的东西在哪**（「记忆归你」的兑现处）、**换机怎么办**。
-     加上一件要他裁决的：出厂文件要不要升级。
-     所以：页名改成「我的文件」，维护那堆收进底部折叠区，**没事时整块不渲染**。 */
+     整页就只剩这两件。 */
   main.innerHTML = '<div class="section"><h2>我的文件</h2><div id="sys-box"></div></div>';
-  renderSysTab("portable");
+  renderSysTab();
 }
 
-function renderSysTab(which) {
+function renderSysTab() {
   const box = document.getElementById("sys-box");
-  if (which === "evolve") {
-    renderEvolutionInto(box);
-  } else {
+  {
     // ⛔ 这页原来只写「clone skills 仓库 → python install.py → python dashboard.py」——
     //    对下载 exe 用的人**直接是错的**：他手上根本没有源码，也没装 Python。
     //    绝大多数用户走的是 exe 那条路，所以先写它。
@@ -1077,28 +887,7 @@ function renderSysTab(which) {
            · 「扫描位置」表——项目没出现时的解法是首页「添加已有项目」，不是让他读这张表；
            · 「复制一段话让 AI 学方法」——傻瓜路径上没人会用它，连后端接口一起删了，
              否则又是一处没人调用的死代码。 */
-      /* 维护区：⛔ **没事就整块不渲染**。以前它常年占着「整理」那一整个 tab，
-         标签还写着「一般不用管」——那就等于告诉用户「这一屏你可以不看」，
-         而它却是设置页的默认页。有事才出现，出现即有事。 */
-      '<div id="sys-maint"></div>';
-    /* 有几件事是真需要人裁决的（出厂文件要不要升级、哪条坑该退休），
-       只有它们非空时才把维护区渲染出来。 */
-    const ev2 = DATA.evolution || {};
-    const maintN = (ev2.seed_pending || []).length + (ev2.seed_kept || []).length +
-      (ev2.candidates || []).length + (ev2.expired_todos || []).length +
-      (ev2.weak_criteria || []).length + (ev2.missing_invalid || []).length +
-      (ev2.broken || []).length + (ev2.identical_pairs || []).length +
-      (DATA.sync || []).length;
-    if (maintN) {
-      const mb = document.getElementById("sys-maint");
-      // ⛔ 副标题别再写「平时不用管」——那是在告诉用户这一屏可以不看，
-      //    而它现在**只在真有事时才出现**。该说的是里面是什么，而且用人话：
-      //    「裁决」「体系一致性」这种词，不懂技术的人读不出要他干什么。
-      mb.innerHTML = '<details style="margin-top:18px"><summary><b>🔧 要你决定的（' + maintN +
-        '）</b><span class="muted-note"> · 灵台自带的文件要不要换新版、哪些旧记录可以删了</span>' +
-        '</summary><div id="sys-maint-box" style="margin-top:10px"></div></details>';
-      renderEvolutionInto(document.getElementById("sys-maint-box"));
-    }
+      "";
     const om = document.getElementById("sys-open-method");
     if (om) {
       om.onclick = () => fetch("api/open_dir", {

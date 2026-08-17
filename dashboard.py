@@ -568,9 +568,6 @@ def evolution_data(projects, pit_rows, health):
         "identical_pairs": health["identical_pairs"],
         "new_this_week": new_this_week,
         "total_pitfalls": len(pit_rows),
-        # 升级传播：新版带来的方法论更新里，哪些没能自动生效、为什么（见 _seed_repo）
-        "seed_kept": (_seed_state().get("kept") or []),
-        "seed_pending": (_seed_state().get("pending") or []),
     }
 
 
@@ -1394,9 +1391,20 @@ def _md5(p):
 
 
 def sync_probe(projects):
-    """通用件 md5 对比：skills scaffold vs 各项目 brain。返回落后清单。"""
+    """通用件落后就**自己同步掉**，不做成一道问用户的选择题。
+
+    ⛔ 以前这里只是「探测」，然后把落后清单摆到界面上让用户勾选「要不要同步」。
+       可 COMMON_FILES 里躺的是 `状态生成器.py`——一个用户从来没写过、也看不懂的
+       工具脚本。让他决定要不要更新它，是把**系统自己分不清/不敢做**的事转嫁给他。
+       用户只看结果。系统能自己了结的，就自己了结。
+    ⛔ 覆盖前一律留 .bak：万一某个项目里的那份被人动过，东西还在，拿得回来。
+    ⛔ 演练态（--roots-file）不写任何真项目——「演练不许碰真源」。
+    ⚠ 只同步纯工具件。规则台账/关口清单是**项目专属数据**（AI 会往里立条打勾），
+       同步会覆盖真数据——2026-08-16 演练差点覆掉 IPGuard 的 R-001/R-002。
+    """
     scaffold = os.path.join(REPO, "project-delivery", "scaffold")
-    out = []
+    drill = os.path.normcase(ACTIVE_ROOTS_FILE) != os.path.normcase(ROOTS_FILE)
+    out, synced = [], []
     for p in projects:
         brain = os.path.join(p["path"], "brain")
         if not os.path.isdir(brain):
@@ -1405,13 +1413,26 @@ def sync_probe(projects):
         for f in COMMON_FILES + SYNC_EXTRA:
             src = os.path.join(scaffold, f)
             dst = os.path.join(brain, f)
-            if not os.path.isfile(dst):
+            if not os.path.isfile(dst) or not os.path.isfile(src):
                 continue  # 项目没有该件，不算落后（新装项目按需补）
-            if _md5(src) != _md5(dst):
+            if _md5(src) == _md5(dst):
+                continue
+            if drill:
                 outdated.append(f)
+                continue
+            try:
+                shutil.copyfile(dst, dst + ".bak")
+                shutil.copyfile(src, dst)
+                synced.append("%s/%s" % (p["name"], f))
+            except OSError:
+                outdated.append(f)      # 同步不了才算落后，并且要出声
         p["outdated"] = outdated
         if outdated:
             out.append({"project": p["name"], "path": p["path"], "outdated": outdated})
+    if synced:
+        # 兜底必须出声：动了用户目录里的文件，哪怕是工具件，也得留下痕迹
+        print("[自动同步] %d 个项目的工具件已更新到新版（旧版留在同目录 .bak）：%s"
+              % (len(synced), "、".join(synced[:6])))
     return out
 
 
@@ -1445,49 +1466,12 @@ def api_sync_project(data):
     return 200, {"ok": True, "synced": n}
 
 
-def api_apply_seed_update(data):
-    """把「认不出来历」的出厂文件换成新版。⛔ 覆盖前一律先留 .bak。
-
-    只处理 _seed_repo 记在 pending 里的那些（v0.2.0 及更早装的，台账里没有）。
-    用户明确改过的（kept）不在这里，也不给入口——那条红线不给开关。
-    """
-    if not BUNDLE:
-        return 400, {"ok": False, "error": "源码态没有出厂副本可换"}
-    want = [k for k in (data.get("files") or []) if isinstance(k, str)]
-    if not want:
-        return 400, {"ok": False, "error": "没选任何文件"}
-    state = _seed_state()
-    allowed = set(state.get("pending") or [])
-    bad = [k for k in want if k not in allowed]
-    if bad:
-        return 400, {"ok": False, "error": "这些不在待定清单里，不许动：%s" % "、".join(bad[:5])}
-    known = dict(state.get("files") or {})
-    done, failed = [], []
-    for key in want:
-        src = os.path.join(BUNDLE, key.replace("/", os.sep))
-        dst = os.path.join(REPO, key.replace("/", os.sep))
-        if not os.path.isfile(src) or not os.path.isfile(dst):
-            failed.append(key)
-            continue
-        try:
-            shutil.copyfile(dst, dst + ".bak")   # 先留退路，再覆盖
-            shutil.copyfile(src, dst)
-            known[key] = _md5(dst)
-            done.append(key)
-        except OSError:
-            failed.append(key)
-    state["files"] = known
-    state["pending"] = [k for k in (state.get("pending") or []) if k not in done]
-    try:
-        with io.open(SEED_MANIFEST, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        return 500, {"ok": False, "error": "台账写不了：%s" % e}
-    try:
-        build(load_roots(), ACTIVE_SITE)
-    except Exception:
-        pass
-    return 200, {"ok": True, "updated": done, "failed": failed}
+# api_apply_seed_update() 删了。它的存在前提是「灵台分不清这份出厂文件用户改过没有，
+# 所以挂到界面上让他自己决定」——而用户根本不知道 scaffold/05_交接.md 是什么，
+# 更不知道自己有没有改过它。**分不清是我们的问题，不该做成一道选择题转嫁给他。**
+# 现在 _shipped_hashes() 记着每一版发出去时的原样，一比就知道：
+# 等于原样 = 没动过 = 自动升级；不等于 = 他改过 = 留着不动，也不打扰他。
+# 于是没有「待定」这一档了，这个接口也就没有存在理由。
 
 
 def api_run_generator(data):
@@ -2081,7 +2065,6 @@ def serve(open_browser):
             routes = {
                 "/api/create_project": lambda: api_create_project(data),
                 "/api/run_generator": lambda: api_run_generator(data),
-                "/api/apply_seed_update": lambda: api_apply_seed_update(data),
                 "/api/project_detail": lambda: api_project_detail(data),
                 "/api/open_dir": lambda: api_open_dir(data),
                 "/api/install_organs": lambda: api_install_organs(data),
@@ -2211,6 +2194,41 @@ def _seed_state():
         return {}
 
 
+_SHIPPED_HASHES = None
+
+
+def _shipped_hashes():
+    """历次版本发出去的出厂文件指纹：{相对路径: {md5, md5, ...}}。
+
+    ⛔ 它解决的是一个**不该问用户的问题**。升级时要判断「这份文件用户改过没有」，
+       v0.2.1 起有 .seeded.json 台账能直接判；但已经装了旧版的人没有台账，
+       原来的做法是把这些文件挂到界面上问他「要不要换新版」——
+       而他根本不知道 `scaffold/05_交接.md` 是什么，更不知道自己有没有改过它。
+       **分不清是我们的问题，不该做成一道选择题转嫁给用户。**
+       记下每一版发出去时的原样，一比就知道：等于原样 = 他没动过 = 可以安全升级。
+    """
+    global _SHIPPED_HASHES
+    if _SHIPPED_HASHES is None:
+        out = {}
+        for base in ([BUNDLE] if BUNDLE else []) + [HERE, os.path.join(HERE, "release")]:
+            p = os.path.join(base, "shipped_hashes.json")
+            if not os.path.isfile(p):
+                continue
+            try:
+                with io.open(p, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                continue
+            # ⛔ 合并所有来源，不是「找到第一处就停」。历史指纹只增不减，多一处
+            #    来源只会让判断更准；而「第一处就停」会让 exe 旁边那份永远被包内的
+            #    挡住——既不能补录，回归也没法造一段历史进去验它（实测就是这么红的）。
+            for _ver, files in (data or {}).items():
+                for rel, h in (files or {}).items():
+                    out.setdefault(rel, set()).add(h)
+        _SHIPPED_HASHES = out
+    return _SHIPPED_HASHES
+
+
 def _seed_repo():
     """exe 启动：把出厂的方法论真源从只读的 BUNDLE 落到 exe 旁边（REPO = HERE）。
 
@@ -2224,17 +2242,21 @@ def _seed_repo():
     只是因为**分不清哪份是用户改的、哪份是我们上次写下去的**。
     那就把这件事记下来：`.seeded.json` 存「我们上次写给你的那份长什么样」。于是：
 
-      · 磁盘上没有            → 复制，记账
-      · 和我们上次写的一字不差 → 用户没动过，**安全升级**，更新记账
-      · 和我们上次写的不一样   → 用户改过，**留着不动**，并说出来
-      · 台账里根本没有         → v0.2.0 及更早装的，分不清，**留着不动**，
-                                 挂到界面上让人自己决定要不要更新（覆盖前留 .bak）
+      · 磁盘上没有                         → 复制，记账
+      · 和我们上次写的一字不差             → 他没动过，**安全升级**，更新记账
+      · 等于**任何一个历史版本发出去的原样** → 同样是他没动过（旧版装的没有台账），
+                                              安全升级。见 _shipped_hashes()
+      · 其余                               → 他改过，**留着不动，也不打扰他**
+
+    ⛔ 不再有「待定」这一档。以前分不清的会挂到界面上问用户「要不要换新版」，
+       而他根本不知道 scaffold/05_交接.md 是什么。**分不清是我们的问题。**
     """
     if not BUNDLE:
         return
     state = _seed_state()
     known = dict(state.get("files") or {})
-    landed, updated, kept, pending = 0, [], [], []
+    hist = _shipped_hashes()
+    landed, updated, kept = 0, [], []
     for top in ("project-delivery", "agent-worksheet"):
         src_root = os.path.join(BUNDLE, top)
         if not os.path.isdir(src_root):
@@ -2259,21 +2281,22 @@ def _seed_repo():
                         known[key] = cur          # 已经是这一版，登记为「我们的」
                         continue
                     prev = known.get(key)
-                    if prev is not None and prev == cur:
-                        shutil.copyfile(src, dst)  # 我们上次写的，用户一字没动
+                    # 「他没动过」的两种证据：台账里记的就是它；或者它等于**某个
+                    # 历史版本发出去的原样**（旧版装的没有台账，只能靠这个判）。
+                    untouched = (prev is not None and prev == cur) or (cur in hist.get(key, ()))
+                    if untouched:
+                        shutil.copyfile(src, dst)
                         known[key] = new
                         updated.append(key)
-                    elif prev is not None:
-                        kept.append(key)           # 用户改过，绝不覆盖
                     else:
-                        pending.append(key)        # 老装机没台账，分不清，等人裁决
+                        kept.append(key)           # 他改过，绝不覆盖，也不打扰他
                 except OSError as e:
                     # 兜底必须出声：落不下去就等于又回到「记了会丢」，不许静默
                     print("[!!] 出厂真源落盘失败 %s：%s" % (fn, e))
     try:
         with io.open(SEED_MANIFEST, "w", encoding="utf-8") as f:
             json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "version": _read_version(),
-                       "files": known, "kept": kept, "pending": pending},
+                       "files": known, "kept": kept},
                       f, ensure_ascii=False, indent=2)
     except OSError as e:
         print("[!!] 写不了升级台账 %s：%s（下次启动会当成老装机处理）" % (SEED_MANIFEST, e))
@@ -2284,9 +2307,6 @@ def _seed_repo():
         print("[升级] %d 个你没改过的方法论文件已更新到新版：%s" % (len(updated), "、".join(updated[:5])))
     if kept:
         print("[保留] %d 个你改过的文件没被覆盖（新版内容不同）：%s" % (len(kept), "、".join(kept[:5])))
-    if pending:
-        print("[待定] %d 个文件是更早版本装的、认不出来历，没动：%s" % (len(pending), "、".join(pending[:5])))
-        print("       要不要换成新版，去 我的文件 → 🔧 要你裁决的 里决定（覆盖前会留 .bak）")
 
 
 def main():

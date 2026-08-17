@@ -53,6 +53,15 @@ if not _os.path.isfile(VER):
     raise SystemExit('[spec] 找不到 VERSION：%s' % VER)
 print('[spec] VERSION -> %s' % VER)
 
+# 历次版本发出去的出厂文件指纹。升级时靠它判断「这份文件用户改过没有」——
+# 等于当年发出去的原样 = 没动过 = 可以安全升级。没有它，旧版装的那批文件
+# 就只能挂到界面上问用户「要不要换新版」，而那是个他答不了的问题。
+SH = _os.path.join(BC, 'release', 'shipped_hashes.json')
+if not _os.path.isfile(SH):
+    SH = _os.path.join(BC, 'shipped_hashes.json')
+if not _os.path.isfile(SH):
+    raise SystemExit('[spec] 找不到 shipped_hashes.json：%s' % SH)
+
 # 不许再把 BC 整个目录打进来。它含 dist/（上一代 exe）和 build/（中间产物），
 # 每打一次就把上一代 exe 套进去一次：568MB 里有 508MB 是这么来的，
 # 而 dashboard.py 对 'brain-console' 这个 bundle 子目录零引用。
@@ -69,6 +78,7 @@ a = Analysis(
         (_os.path.join(BC, 'AI\u5f00\u7a97\u5fc5\u8bfb.md'), '.'),
         (_os.path.join(BC, 'roots.example.json'), '.'),
         (VER, '.'),
+        (SH, '.'),
     ],
     hiddenimports=HIDDEN,
     hookspath=[],
