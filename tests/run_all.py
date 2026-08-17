@@ -64,6 +64,26 @@ def _exe():
     return None
 
 
+def _kill_port(port=8765):
+    """清掉占着端口的进程，返回清了几个。开跑前先清场——见上面那两次假红。"""
+    n = 0
+    try:
+        r = subprocess.run("netstat -ano -p TCP", shell=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for ln in (r.stdout or b"").decode("mbcs", errors="replace").splitlines():
+            if (":%d " % port) in ln and "LISTENING" in ln:
+                pid = ln.split()[-1]
+                if pid.isdigit() and pid != "0":
+                    subprocess.run("taskkill /F /PID %s" % pid, shell=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    n += 1
+    except OSError:
+        pass
+    if n:
+        time.sleep(1.5)
+    return n
+
+
 def _up(port=8765, timeout=1.0):
     s = socket.socket()
     s.settimeout(timeout)
@@ -116,10 +136,15 @@ def main():
     results = []
     try:
         # ⛔ 跑的过程中别用浏览器开 8765。stress_a/stress_b 验的就是端口独占和并发，
-        #    人这时候连上去，红灯是自己造的——实测因此假红一次，白排查一轮。
+        #    这时候有别的实例在跑，红灯是自己造的——**同形假红实测发生过两次**：
+        #    第一次是浏览器连着，第二次是起 run_all 之前刚手动起了一个 exe 实例。
+        #    光提示不够（两次都是提示存在的情况下踩的），所以这里先动手清场。
         print("⛔ 接下来几分钟别用浏览器打开 8765，也别手动起 exe——")
-        print("   stress_a/stress_b 正在验端口独占与并发，你连上去会让它假红。")
+        print("   stress_a/stress_b 正在验端口独占与并发，多一个实例就会让它假红。")
         print("   跑完 runner 会自动把服务起回来。")
+        n_killed = _kill_port()
+        if n_killed:
+            print("   （已先清掉 %d 个占着 8765 的进程，免得它们混进端口竞争测试）" % n_killed)
         print()
         print("=== 常规回归（每个跑完都会清掉 8765）===")
         for s in SUITE:
