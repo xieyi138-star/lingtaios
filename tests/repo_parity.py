@@ -17,11 +17,14 @@ SYNC = os.path.join(BC, "release_sync.py")
 
 
 def main():
-    # ⛔ 兜底必须出声：跳过的理由要打出来，不能静默 PASS 让人以为守住了。
+    # ⛔ 兜底必须出声——但**出声不等于判绿**。这里以前把跳过 return 0，
+    #    runner 照 0 判绿，于是「打印了 [SKIP] 的绿」和「真验过的绿」在汇总里
+    #    长得一模一样，两条最重要的红线连着若干窗什么都没验。
+    #    现在跳过走退出码 3，runner 单独计一档，永远不并进绿。
     if not os.path.isfile(SYNC):
         print("[SKIP] 没有 release_sync.py —— 这是主源码专属的发布工具，")
         print("       从公开仓 clone 出来的副本里本来就没有它，跳过属于预期。")
-        return 0
+        return 3
 
     r = subprocess.run([sys.executable, "-X", "utf8", SYNC, "--check"],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -31,9 +34,13 @@ def main():
     if r.returncode == 0:
         print("\n[PASS] 两仓逐字节一致，且主源码无未登记去向的文件")
         return 0
-    if "发布仓不存在" in out:
-        print("\n[SKIP] 本机没有发布仓（只在作者机器上有），这条红线在此机无从校验")
-        return 0
+    # ⛔ 走到这里 release_sync.py 是在的 —— 也就是**这台就是作者机器**。
+    #    那么「找不到发布仓」不是"此机没有"，是配置坏了，必须红。
+    #    以前这条判 SKIP→绿，正是假绿的出口。
+    if "不知道发布仓在哪" in out or "发布仓不存在" in out:
+        print("\n[FAIL] 主源码在、发布仓找不到 —— 这台是作者机器，配置坏了不是「无从校验」。")
+        print("       在 brain-console\\.mirror_path 里写一行发布仓路径即可。")
+        return 1
     print("\n[FAIL] 两仓不一致或有未登记文件——跑 release_sync.py --apply 修，")
     print("       新增文件先去 release_sync.py 的映射表里登记去向")
     return 1

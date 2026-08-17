@@ -42,6 +42,7 @@ SUITE = [
     "destructive_probe.py",
     "project_mgmt_stress.py",
     "exe_mgmt_check.py",
+    "exe_no_python_dep.py",      # 打包态发给用户的指令里不许出现他可能没有的 python 命令
     "no_pollute_test.py",
     "workspace_e2e.py",
     "finder_e2e.py",
@@ -120,6 +121,13 @@ def run(script, label=None):
     out = (r.stdout or b"").decode("utf-8", errors="replace")
     tail = [ln for ln in out.strip().splitlines() if ln.strip()]
     last = tail[-1] if tail else ""
+    # 退出码 3 = 脚本自己说「这台机器上无从校验」。它既不是绿也不是红。
+    # ⛔ 以前脚本用 return 0 表达跳过，runner 照 0 判绿，于是「一个字都没验」
+    #    在汇总里长得和「真验过了」一模一样——repo_parity / clone_smoke 两条
+    #    最重要的红线就是这么连着若干窗静默失效的。这一档必须单独存在。
+    if r.returncode == 3:
+        print("  %-24s 跳过  (%.0fs)  %s" % (script, time.time() - t0, last[:70]))
+        return (script, None, last)
     # 有的脚本自己不设退出码，靠末行文案表态——两个都看，任一为红就算红
     red = (r.returncode != 0) or ("SOME FAILED" in out) or ("[FAIL]" in out) \
         or ("内容不同 0 件" not in out and "soul_manifest" in script)
@@ -195,6 +203,11 @@ def main():
           (len(results), len(results) - len(red) - len(skipped), len(red), len(skipped)))
     if red:
         print("红的：%s" % ", ".join(red))
+    # 跳过 ≠ 绿。不喊出来，「21 个跑了 21 个」读起来就是全验过了。
+    # 退出码仍是 0：陌生人 clone 出来的副本里 repo_parity/clone_smoke 本来就该跳，
+    # 判红会让公开仓的测试套对所有人都是红的。但它必须刺眼。
+    if skipped:
+        print("跳过的（**没验过，别当绿看**）：%s" % ", ".join(skipped))
     print("服务状态：%s" % ("UP" if _up() else "DOWN [!!]"))
     sys.exit(1 if red else 0)
 

@@ -28,11 +28,27 @@ import sys
 import tempfile
 
 BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MIRROR = os.environ.get("LINGTAI_MIRROR") or r"D:\tmp\lingtaios-repo"
 HOME = os.path.expanduser("~")   # 本机真实家目录，运行时取，不写死
 PY = sys.executable
 DN = subprocess.DEVNULL
 FULL = "--full" in sys.argv or os.environ.get("CLONE_SMOKE_FULL") == "1"
+
+# 发布仓在哪，只有一个真源：release_sync.py 的 resolve_mirror()。
+# ⛔ 这里曾经自己写一份 `os.environ.get("LINGTAI_MIRROR") or r"D:\tmp\lingtaios-repo"`。
+#    两个毛病叠在一起：① 第二份真源；② 兜底指着一个早就挪走的路径。
+#    于是环境变量没传进来时它静默跳过、还 return 0 被 runner 判绿——
+#    这条本该「照出布局失配」的红线，连着若干窗一次都没真跑过。
+SYNC = os.path.join(BC, "release_sync.py")
+
+
+def _mirror():
+    """返回 (路径, 来源)。release_sync.py 不在 = 陌生人从公开仓 clone 出来的副本。"""
+    if not os.path.isfile(SYNC):
+        return None, None
+    if BC not in sys.path:
+        sys.path.insert(0, BC)
+    import release_sync
+    return release_sync.resolve_mirror()
 
 
 def run(cmd, cwd=None):
@@ -41,20 +57,31 @@ def run(cmd, cwd=None):
 
 
 def main():
-    if not os.path.isdir(os.path.join(MIRROR, ".git")):
-        print("[SKIP] 没有发布仓（%s）——这条只在有发布仓的机器上跑得了。" % MIRROR)
-        print("       换机或挪过位置设环境变量 LINGTAI_MIRROR。")
-        return 0
+    # 退出码约定：0 绿 / 1 红 / 3 跳过（runner 单独计一档，永远不并进绿）
+    if not os.path.isfile(SYNC):
+        print("[SKIP] 没有 release_sync.py —— 这是主源码专属的发布工具，")
+        print("       从公开仓 clone 出来的副本里本来就没有它，没有发布仓可验。")
+        return 3
+    mirror, msrc = _mirror()
+    if not mirror:
+        print("[FAIL] 主源码在，却不知道发布仓在哪——这台就是作者机器，")
+        print("       所以这不是「无从校验」，是配置坏了。")
+        print("       在 %s 里写一行发布仓路径即可。" % os.path.join(BC, ".mirror_path"))
+        return 1
+    print("[i] 发布仓 %s（来自 %s）" % (mirror, msrc))
+    if not os.path.isdir(os.path.join(mirror, ".git")):
+        print("[FAIL] %s 不是 git 仓——来源 %s 指错了地方。" % (mirror, msrc))
+        return 1
     if shutil.which("git") is None:
         print("[SKIP] 没有 git，clone 不了")
-        return 0
+        return 3
 
     work = tempfile.mkdtemp(prefix="clone_smoke_")
     repo = os.path.join(work, "clone")
     fake_claude = os.path.join(work, "claude")
     results = []
     try:
-        rc, out = run(["git", "clone", "-q", MIRROR, repo])
+        rc, out = run(["git", "clone", "-q", mirror, repo])
         if rc != 0:
             print("[FAIL] clone 失败：%s" % out[-300:])
             return 1

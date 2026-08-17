@@ -99,6 +99,10 @@ function renderProjectDetail(d) {
     '<div class="filter-row">' +
     '<button class="chip-btn primary" id="pd-resume">📋 复制「继续做」指令</button>' +
     '<button class="chip-btn" id="pd-open">📁 打开项目目录</button>' +
+    /* 后端 /api/run_generator 一直都在，前端从来没调用过——能力有、够不着。
+       对只用 exe 的人这是个断掉的闭环：建项目时状态自动生成，之后再没法重算，
+       而文档给的办法是跑 python，他机器上可能根本没有。 */
+    (d.has_brain ? '<button class="chip-btn" id="pd-regen">🔄 重算状态</button>' : "") +
     '<button class="chip-btn" id="pd-remove">🗂 移出项目库</button></div>' +
     '<div id="pd-rm-box"></div>';
 
@@ -160,6 +164,19 @@ function renderProjectDetail(d) {
     const ok = await copyText(d.resume);
     const b = document.getElementById("pd-resume");
     b.textContent = ok ? "✓ 已复制——粘给任何 AI" : "✗ 复制失败";
+  };
+  const regenBtn = document.getElementById("pd-regen");
+  if (regenBtn) regenBtn.onclick = async () => {
+    regenBtn.disabled = true;
+    regenBtn.textContent = "重算中…";
+    const r = await post("api/run_generator", { path: d.path });
+    if (!r.ok) {
+      regenBtn.disabled = false;
+      regenBtn.textContent = "✗ " + (r.error || "重算失败");
+      return;
+    }
+    // 重进详情页：不刷新的话「最近一次生成」还是旧的，用户会以为没生效
+    reloadData(() => goProjectDetail(d.path));
   };
   // 移出项目库：先就地确认，把「文件一个不动」说清楚，别让人以为是删文件
   document.getElementById("pd-remove").onclick = () => {
@@ -329,11 +346,21 @@ function renderHome() {
     // 之前只写在文档里没做出来。
     ' · <a href="' + REPO_URL + '/discussions" target="_blank" rel="noopener">这东西帮到你了？说一声 →</a>' +
     "</span></div>";
+  const rest = DATA.projects.length - active.length;
   html += '<div class="section"><h2>进行中的项目（' + active.length + '）</h2><div class="cards">' +
     active.slice(0, 6).map(slimCard).join("") + "</div>" +
     (active.length > 6 ? '<p class="muted-note">更多见 <a href="#" class="h-goto-projects">项目库 →</a></p>' : "") +
-    '<p class="muted-note">其余 ' + (DATA.projects.length - active.length) +
-    ' 个未装系统的项目（可能没完工）→ <a href="#" class="h-goto-projects">去项目库看，全部可点开续做 →</a></p></div>';
+    /* 空状态得给条路。首跑向导有引导，点了「跳过」落到这儿反而只剩一个 0——
+       陌生人第一次打开卡在这一屏，前面所有功夫都白做。 */
+    (DATA.projects.length === 0
+      ? '<p class="muted-note">还一个都没有。点上面「＋ 新项目」建第一个，' +
+        '或者「添加已有项目」把手上正在做的加进来。</p>'
+      : "") +
+    /* ⛔ rest 为 0 时别再写「其余 0 个…去项目库看」——那是让人点过去看一片空白。 */
+    (rest > 0
+      ? '<p class="muted-note">其余 ' + rest +
+        ' 个未装系统的项目（可能没完工）→ <a href="#" class="h-goto-projects">去项目库看，全部可点开续做 →</a></p>'
+      : "") + "</div>";
 
   main.innerHTML = html;
   attachCardClicks();

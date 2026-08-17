@@ -4,8 +4,15 @@ import glob, hashlib, io, os, shutil, socket, subprocess, tempfile, time
 
 BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tests 的上一级就是 brain-console
 # release_pkg 是作者本机的发布目录，别人 clone 下来只有自己打出来的 dist——两个都认，
-# 谁在就用谁，否则这行在别人机器上直接 FileNotFoundError。首选保持原样，不改语义。
-_CAND = [os.path.join(BC, d, "lingtaios.exe") for d in ("release_pkg", "dist")]
+# 谁在就用谁，否则这行在别人机器上直接 FileNotFoundError。
+# ⛔ 顺序是 dist 优先，不能反过来（这里曾经是 release_pkg 优先）：
+#    ① run_all._exe() 就是 dist 优先，整套回归起的、验的都是 dist 那个 exe，
+#       而这条却去剖 release_pkg 那个——**同一轮回归里测的是两个不同的二进制**；
+#    ② release_pkg 装的是"上次打包那一版"，所以改任何一行源码，这条就红到
+#       下次发版为止。常驻的红等于没有红——真出问题时没人分得出来。
+#    ③ release_pkg 滞后本来就有 make_release.py 自己守（清空重建 + 逐字节回验），
+#       而且它是直接拷 dist/lingtaios.exe 进包的，两者由构造保证同源，不存在漏网。
+_CAND = [os.path.join(BC, d, "lingtaios.exe") for d in ("dist", "release_pkg")]
 EXE = next((p for p in _CAND if os.path.isfile(p)), _CAND[0])
 # 和 lingtaios.spec 同一个布局判定，必须同步改：
 #   主源码  skills\brain-console\  → project-delivery 在**上一级**（兄弟目录）
@@ -39,7 +46,9 @@ SOUL = [
     ("项目交付法（四阶段+十二条纪律）",           "project-delivery/项目交付法.md",    "project-delivery/项目交付法.md"),
     ("核心大脑（六器官中枢）",                   "project-delivery/核心大脑.md",      "project-delivery/核心大脑.md"),
     ("道法术（执行/探索模式开关）",               "project-delivery/道法术.md",        "project-delivery/道法术.md"),
-    ("坑库（38 条·带失效判据）",                 "project-delivery/坑库.md",          "project-delivery/坑库.md"),
+    # ⛔ 标签里不写条数：写死的「38 条」在坑库涨到 77 条之后还挂在屏幕上，
+    #    每跑一次就对操作者撒一次谎。条数看界面/data.json，那是机器生成的。
+    ("坑库（带失效判据）",                        "project-delivery/坑库.md",          "project-delivery/坑库.md"),
     ("装配图（唯一导航真源）",                   "project-delivery/装配图.md",        "project-delivery/装配图.md"),
     ("SKILL 路由器（四真源+开窗五步）",           "project-delivery/SKILL.md",         "project-delivery/SKILL.md"),
     ("派工/验收真源",                            "agent-worksheet/SKILL.md",          "agent-worksheet/SKILL.md"),
@@ -65,6 +74,9 @@ for _ in range(150):
     time.sleep(0.4)
 new = sorted(set(glob.glob(_MEIGLOB)) - before, key=os.path.getmtime, reverse=True)
 bundle = new[0] if new else None
+# 剖的是哪个 exe 必须打出来：dist 和 release_pkg 两个二进制长得一样，
+# 结论却可能相反——不说清楚，红了要重新查一遍才知道量的是哪一个。
+print("剖的 exe:", EXE)
 print("exe 已展开到:", bundle, "（新出现 %d 个，取最新的）\n" % len(new))
 
 ok = miss = diff = 0

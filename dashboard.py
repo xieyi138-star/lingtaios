@@ -131,7 +131,7 @@ def api_templates():
     close_text = (
         "按收窗四步收：①销账（回状态源标死已完成项）②教训进坑库/法典（不记流水账）"
         "③C 类过程标到期 ④更新 brain\\05_交接.md\n"
-        "收完跑 python -X utf8 状态生成器.py 并报告告警"
+        "收完%s 并报告告警" % _regen_cmd()
     )
     return {"ok": True, "open": open_text, "close": close_text,
             "paths": {"card": card, "map": MAP}}
@@ -525,7 +525,15 @@ def evolution_data(projects, pit_rows, health):
     # 本周新增坑（"越用越强"的可见证据）
     import datetime as _dt
     week_ago = (_dt.datetime.now() - _dt.timedelta(days=7)).strftime("%Y-%m-%d")
-    new_this_week = sum(1 for r in pit_rows if (r.get("入库") or "") >= week_ago)
+    # ⛔ 只按日期算是错的：出厂那几十条带着**作者**的入库日期，用户刚装完什么都没干，
+    #    首页就写「本周 +77」，把作者的批量并库算成了他的战果。
+    #    一个满口「先实证再开口」的产品，首屏摆一个编出来的数字，比少一个数字贵得多。
+    #    打包态能精确区分：BUNDLE 里那份坑库就是出厂快照，编号不在里面的才是用户自己记的。
+    factory = _factory_pit_codes()
+    new_this_week = sum(
+        1 for r in pit_rows
+        if (r.get("入库") or "") >= week_ago
+        and (not factory or (r.get("编号") or "") not in factory))
     # 判据强度：让「这条判据可不可信」在界面上随手可见，而不是等到要删时才发现它是空话
     graded, grade_stats = [], {"强": 0, "中": 0, "弱": 0, "缺": 0}
     for r in pit_rows:
@@ -549,9 +557,53 @@ def evolution_data(projects, pit_rows, health):
     }
 
 
+_FACTORY_PIT_CODES = None
+
+
+def _factory_pit_codes():
+    """出厂就带的坑编号集合；源码态返回空集（那份库本身就是出厂，无从区分）。
+
+    只读 BUNDLE（PyInstaller 每次启动新建的解压目录）里那份，它是**打包那一刻**的
+    快照，用户后来记的坑只在 exe 旁边的持久目录里，不会混进来。
+    """
+    global _FACTORY_PIT_CODES
+    if _FACTORY_PIT_CODES is None:
+        codes = set()
+        if BUNDLE:
+            p = os.path.join(BUNDLE, "project-delivery", "坑库.md")
+            try:
+                with io.open(p, encoding="utf-8") as f:
+                    codes = set(re.findall(r"^\|\s*([PWSRT]\d+)\s*\|", f.read(), re.M))
+            except OSError:
+                codes = set()
+        _FACTORY_PIT_CODES = codes
+    return _FACTORY_PIT_CODES
+
+
+def _map_write_target():
+    """演练态往哪写装配图。
+
+    ⛔ 「演练不许碰真源」这条上一轮堵了配置（roots.json）和产物（site/data.json），
+       漏了第三样：**装配图**。api_install_organs 会 _register_in_map 追加一行 L6，
+       而那一行永远写真 MAP——实测新加的回归脚本用 --roots-file 跑了 4 次，
+       就往本机装配图塞进 4 条指向临时目录的死登记（跑完目录删了，登记留着，
+       健康检查从此 total=63/absent=4）。堵一半等于没堵，这次连它一起算。
+    """
+    if os.path.normcase(ACTIVE_ROOTS_FILE) == os.path.normcase(ROOTS_FILE):
+        return MAP
+    return os.path.join(os.path.dirname(ACTIVE_ROOTS_FILE), "装配图.演练.md")
+
+
 def _register_in_map(section_marker, new_row):
-    """在装配图指定小节末表格追加一行（真源登记，先改图）。"""
-    with io.open(MAP, encoding="utf-8") as f:
+    """在装配图指定小节末表格追加一行（真源登记，先改图）。
+
+    演练态写到演练目录的副本，绝不碰真装配图——见 _map_write_target。
+    """
+    target = _map_write_target()
+    # 演练副本第一次写之前不存在，就从真图起个头：演练看到的导航内容跟真的一样，
+    # 但从此以后所有写入都落在副本上。
+    src = target if os.path.isfile(target) else MAP
+    with io.open(src, encoding="utf-8") as f:
         lines = f.read().split("\n")
     sec_idx = next((i for i, ln in enumerate(lines) if ln.startswith(section_marker)), None)
     if sec_idx is None:
@@ -561,7 +613,7 @@ def _register_in_map(section_marker, new_row):
     insert_at = max(i for i in range(sec_idx, nxt) if lines[i].startswith("|"))
     if new_row not in lines:
         lines.insert(insert_at + 1, new_row)
-        with io.open(MAP, "w", encoding="utf-8") as f:
+        with io.open(target, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
 
@@ -1252,6 +1304,25 @@ def api_browse(data):
                  "child_candidates": cand, "self": self_ev}
 
 
+def _regen_cmd(brain_dir=None):
+    """收工重算状态该敲什么——按**当前形态**给，不按作者的形态给。
+
+    ⛔ 冻结态绝不许发 `python -X utf8 状态生成器.py`。
+       用户手上一定有 exe，不一定有 python.exe——这正是 _run_generator 为了
+       「零依赖」亲手绕开的东西（见那里的注释）。产品自己绕开的依赖，
+       不能转头写进发给用户的说明书；这跟「报错叫人去跑他根本没有的
+       install.py」是同一类错，那次已经付过一次代价了。
+    """
+    if _FROZEN:
+        exe = os.path.abspath(sys.executable)
+        if brain_dir:
+            return '在命令行跑 "%s" --regen "%s"（或回驾驶舱项目页点「🔄 重算状态」）' % (exe, brain_dir)
+        return '跑 lingtaios.exe --regen <项目目录>（或回驾驶舱项目页点「🔄 重算状态」）'
+    if brain_dir:
+        return "跑 python -X utf8 状态生成器.py（在 %s 目录）" % brain_dir
+    return "跑 python -X utf8 状态生成器.py"
+
+
 def _run_generator(brain_dir):
     """用 skills 真源直跑任意项目（v0.7 共享化：--dir，项目副本只是快照）。"""
     gen = os.path.join(REPO, "project-delivery", "scaffold", "状态生成器.py")
@@ -1461,8 +1532,8 @@ def api_project_detail(data):
         step2 = ("%s再读 %s 和 %s，告诉我：现在到哪了、下一步是什么" % (
             root_hint, os.path.join(brain, "01_法典.md"), hand_p))
         seg = "立刻把「做到哪 / 下一步」更新进 %s" % hand_p
-        close_step = ("更新 %s（做完的/没做完的），然后跑 python -X utf8 状态生成器.py（在 %s 目录）——"
-                      "下次双击驾驶舱，进度自动反映") % (hand_p, brain)
+        close_step = ("更新 %s（做完的/没做完的），然后%s——"
+                      "下次双击驾驶舱，进度自动反映") % (hand_p, _regen_cmd(brain))
     else:
         step2 = ("读 %s 里的交接/施工图文档（文件名见驾驶舱项目详情页），告诉我：现在到哪了、下一步是什么" % path)
         seg = "立刻把「做到哪 / 下一步」追加写进 %s" % handoff
@@ -1954,6 +2025,17 @@ def serve(open_browser):
         """
         allow_reuse_address = False
 
+        # stdlib 默认 request_queue_size=5，也就是 accept 队列只排得下 5 个。
+        # ⛔ Windows 在这个队列满时**发 RST**（Linux 是丢 SYN 让客户端重试），
+        #    客户端拿到的就是 ConnectionResetError(10054)——在浏览器里长成
+        #    `TypeError: Failed to fetch`，和"产品挂了"一模一样。
+        # 隔离实测（同 handler、200 请求 / 50 线程、跑 8 轮，只换这一个量）：
+        #    队列 5   → 1588/1600，8 轮里 4 轮有失败，12 次 ConnectionResetError
+        #    队列 128 → 1600/1600，0 轮失败
+        # 这是 stress_b 那条并发用例间歇性红的真因——不是测试写松了，是真会丢请求。
+        # 触发不需要压测：多开几个标签页 + AI 在轮询 + 手动刷新就够了。
+        request_queue_size = 128
+
         def server_bind(self):
             if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
                 self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -2068,6 +2150,8 @@ def main():
     ap.add_argument("--health", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--roots-file", help="覆盖 roots.json 落点（演练/多机配置）")
+    ap.add_argument("--regen", metavar="项目或brain目录",
+                    help="重算这个项目的 02_状态（不需要装 Python，exe 自己就能跑生成器）")
     args = ap.parse_args()
 
     # frozen 首跑：落示例文件 + 自动探测各根写 roots.json（否则 load_roots 直接退出，界面打不开）
@@ -2097,6 +2181,33 @@ def main():
             with io.open(ROOTS_FILE, "w", encoding="utf-8") as f:
                 json.dump({"machine_id": machine_id, "roots": roots, "setup_done": False},
                           f, ensure_ascii=False, indent=2)
+
+    # ⛔ 这个入口不是锦上添花，是补一个断掉的闭环。
+    #    「继续做」指令让 AI 收工时跑 `python -X utf8 状态生成器.py`，
+    #    而本文件的 _run_generator 里白纸黑字写着「用户机器上可能根本没有 Python」——
+    #    产品为了零依赖亲手绕开的东西，却写进了发给用户的说明书。
+    #    下载 exe 的人手上一定有 exe，不一定有 python.exe。所以给 exe 一条等价命令。
+    #    放在 _seed_repo() 之后：生成器真源是首跑落盘的，早于它跑就找不到。
+    if args.regen:
+        brain = os.path.abspath(args.regen)
+        # 给项目根目录也认——少一次「路径给错了」的往返
+        if os.path.basename(brain).lower() != "brain" and os.path.isdir(os.path.join(brain, "brain")):
+            brain = os.path.join(brain, "brain")
+        if not os.path.isdir(brain):
+            print("[XX] 不是一个目录：%s" % brain)
+            sys.exit(2)
+        g = _run_generator(brain)
+        if g.get("error"):
+            print("[XX] 重算失败：%s" % g["error"])
+            sys.exit(1)
+        tail = (g.get("out") or "").strip()
+        if tail:
+            print(tail[-1200:])
+        if g.get("exit"):
+            print("[XX] 生成器退出码 %s%s" % (g["exit"], ("：" + g["err"]) if g.get("err") else ""))
+            sys.exit(1)
+        print("[OK] 已重算 %s" % brain)
+        sys.exit(0)
 
     if args.roots_file:
         global ACTIVE_ROOTS_FILE, ACTIVE_SITE
