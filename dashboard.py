@@ -1345,8 +1345,34 @@ def _regen_cmd(brain_dir=None):
     return "跑 python -X utf8 状态生成器.py"
 
 
+_GEN_LOCK = threading.Lock()
+
+
+def _state_age_days(state_json):
+    """这份 02_状态.json 是几天前算的；读不到/没有返回 None（当成「该算了」）。"""
+    try:
+        with io.open(state_json, encoding="utf-8") as f:
+            at = json.load(f).get("at") or ""
+        return int((time.time() - time.mktime(
+            time.strptime(at, "%Y-%m-%d %H:%M:%S"))) // 86400)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def _run_generator(brain_dir):
-    """用 skills 真源直跑任意项目（v0.7 共享化：--dir，项目副本只是快照）。"""
+    """用 skills 真源直跑任意项目（v0.7 共享化：--dir，项目副本只是快照）。
+
+    ⛔ 必须串行。冻结态是**进程内** runpy 跑的，会临时借走 sys.argv 和 stdout——
+       而服务是 ThreadingHTTPServer，两个请求同时进来就互相踩：A 把 argv 换成
+       自己的，B 紧接着也换，A 跑出来的是 B 的项目。
+       以前只有「点按钮」一条路，撞上的概率低到看不见；现在扫描时会自动重算，
+       一次 build 里就可能连着跑好几个，非串行不可。
+    """
+    with _GEN_LOCK:
+        return _run_generator_inner(brain_dir)
+
+
+def _run_generator_inner(brain_dir):
     gen = os.path.join(REPO, "project-delivery", "scaffold", "状态生成器.py")
     if not os.path.isfile(gen):
         return {"error": "生成器真源不在：%s" % gen}
@@ -2001,10 +2027,27 @@ def discover_projects(roots, sources):
         found.pop(os.path.normpath(x).lower(), None)
 
     projects = []
+    # 演练态（--roots-file）一个真项目都不碰——「演练不许碰真源」
+    _drill = os.path.normcase(ACTIVE_ROOTS_FILE) != os.path.normcase(ROOTS_FILE)
+    _regened = []
     for p in found.values():
         organs = {}
         for o in ORGANS:
             organs[o] = os.path.isfile(os.path.join(p, "brain", o))
+        # ⛔ 状态旧了，扫描时**自己算**——这是「永不脱节」的兜底层。
+        #    上一窗干完活、中间隔了几天、新窗口接手：用户根本不知道 AI 上次做到哪，
+        #    更不会记得先去点重算。这一层保证他一打开驾驶舱看到的就是真的。
+        #    ⚠️ 它不取代「继续做」指令里那一步和详情页那个按钮——三层各堵一个洞：
+        #       这一层堵「开了驾驶舱但什么都没点」；指令那步堵「直接复制去新窗口、
+        #       没回驾驶舱」；按钮堵「想手动确认一次」。脱节是静默的，多一层比少一层值。
+        #    ⚠️ 只算旧的（≥1 天），新的跳过 → 稳态成本约等于 0
+        #       （本机 21 个项目里只有 2 个带状态源，各约 0.2 秒）。
+        _b = os.path.join(p, "brain")
+        if not _drill and os.path.isfile(os.path.join(_b, "状态源.json")):
+            _age = _state_age_days(os.path.join(_b, "02_状态.json"))
+            if _age is None or _age >= 1:
+                if not (_run_generator(_b) or {}).get("error"):
+                    _regened.append(os.path.basename(p))
         alarms, state, at = [], None, ""
         sj = os.path.join(p, "brain", "02_状态.json")
         if os.path.isfile(sj):
@@ -2042,6 +2085,10 @@ def discover_projects(roots, sources):
             "state_age_days": age_days,
             "handoff_mtime": time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(handoff))) if os.path.isfile(handoff) else "",
         })
+    if _regened:
+        # 兜底必须出声：动了用户项目里的文件（重算 02_状态），得留下痕迹
+        print("[自动重算] %d 个项目的状态是旧的，已重算：%s"
+              % (len(_regened), "、".join(_regened[:6])))
     projects.sort(key=lambda x: x["name"])
     return projects
 
