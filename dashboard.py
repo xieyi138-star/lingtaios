@@ -1804,10 +1804,13 @@ def build(roots, out_dir):
         if rows and not columns:
             columns = list(rows[0].keys())
 
+    # 只登记「四篇方法论在不在、在哪」，**不再把全文渲染成 HTML 塞进 data.json**。
+    # 界面上的「方法」页已经去掉了——那四篇是给 AI 读的文件，不是给人在网页里翻的，
+    # 而渲染出来的 HTML 占了 data.json 的 92.2 / 111.4 KB（83%），每次开页面白传一遍。
+    # 想看/想改的人走 设置 →「换机 / 我的文件」，那里给路径和「打开目录」按钮。
     methods = []
     for name, path in METHOD_DOCS:
-        with io.open(path, encoding="utf-8") as f:
-            methods.append({"name": name, "path": path, "html": mdlite.render(f.read())})
+        methods.append({"name": name, "path": path, "ok": os.path.isfile(path)})
 
     evolution = evolution_data(projects, pit_rows, health)
     sync = sync_probe(projects)
@@ -2086,7 +2089,8 @@ def main():
         ck(not _bad, "判据强度分档认得出空话/循环/结构性（统计：%s）"
            % "/".join("%s%d" % (k, _gs.get(k, 0)) for k in ("强", "中", "弱", "缺")),
            "判错：%s" % _bad)
-        ck(len(data["methods"]) == 4, "四真源渲染齐")
+        ck(len(data["methods"]) == 4 and all(m["ok"] for m in data["methods"]),
+           "方法论四篇都在位", "缺：%s" % [m["name"] for m in data["methods"] if not m["ok"]])
         ck(any("{NEXUS}/00_core/装配图.md" in s["path"] for s in data["sources"]), "00_core 装配图指针已登记")
         t = api_templates()
         ck(t["ok"] and "AI开窗必读" in t["open"] and os.path.isfile(t["paths"]["card"]),

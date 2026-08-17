@@ -749,7 +749,7 @@ function renderEvolutionInto(box) {
     ((ev.broken || []).map(m => "<p>断头：" + esc(m.path) + "</p>").join("") +
      (ev.identical_pairs || []).map(p => "<p>同名双份：" + esc(p.a) + " ⟷ " + esc(p.b) + "</p>").join("") ||
      '<p class="muted-note">没有断头或双份。</p>') +
-    '<p class="muted-note"><a href="#" id="ev-goto-method">去「方法」页看装配图 →</a></p></div>' +
+    '<p class="muted-note"><a href="#" id="ev-goto-method">这些文件在哪 →</a></p></div>' +
     maintSecs.map(renderSec).join("") + "</details>";
 
   if (any || maintAny) {
@@ -771,9 +771,11 @@ function renderEvolutionInto(box) {
   if (gm) {
     gm.onclick = e => {
       e.preventDefault();
+      // 「方法」tab 已经去掉了（那四篇是给 AI 读的文件，不是给人翻的网页），
+      // 这个链接改指到「换机 / 我的文件」——那里写着文件在哪、还能一键打开目录。
       document.querySelectorAll(".stab").forEach(x =>
-        x.classList.toggle("active", x.dataset.s === "methods"));
-      renderSysTab("methods");
+        x.classList.toggle("active", x.dataset.s === "portable"));
+      renderSysTab("portable");
     };
   }
   const delBtn = document.getElementById("ev-delete");
@@ -820,14 +822,17 @@ function renderEvolutionInto(box) {
   }
 }
 
-/* ---------- 设置页：进化审计 / 开工四问 / 换机 / 方法 ---------- */
+/* ---------- 设置页：整理 / 方法 / 换机 ---------- */
 function renderSystem() {
+  // ⛔ 这里只放用户平常真会用的。删过的：
+  //   「开工四问」——实测填满四格、点「检查」，它只判断有没有填，内容一个字不看，
+  //     不落盘、切个 tab 回来就全空了。而「想清楚再开工」这件事，新项目向导里的
+  //     「终极之果（至少填 1 行）」和「红线」是真落盘的，那才是执行点。
+  //   「装配图」页——tab 栏里根本没有它的按钮，是够不到的死代码。
   let html = '<div class="section"><h2>设置</h2>' +
     '<div class="doc-tabs">' +
-    '<button class="doc-tab stab active" data-s="evolve">进化审计（每周一次）</button>' +
-    '<button class="doc-tab stab" data-s="fourq">开工四问</button>' +
-    '<button class="doc-tab stab" data-s="portable">换机</button>' +
-    '<button class="doc-tab stab" data-s="methods">方法</button>' +
+    '<button class="doc-tab stab active" data-s="evolve">整理</button>' +
+    '<button class="doc-tab stab" data-s="portable">换机 / 我的文件</button>' +
     '</div><div id="sys-box"></div></div>';
   main.innerHTML = html;
   document.querySelectorAll(".stab").forEach(b => b.onclick = () => {
@@ -841,56 +846,33 @@ function renderSysTab(which) {
   const box = document.getElementById("sys-box");
   if (which === "evolve") {
     renderEvolutionInto(box);
-  } else if (which === "methods") {
-    box.innerHTML = '<div class="doc-tabs">' +
-      DATA.methods.map((m, i) => '<button class="doc-tab" data-i="' + i + '">' + esc(m.name) + "</button>").join("") +
-      '</div><div class="doc" id="doc-box">' + DATA.methods[0].html + "</div>";
-    document.querySelectorAll("#sys-box .doc-tab").forEach(b => b.onclick = () => {
-      document.querySelectorAll("#sys-box .doc-tab").forEach(x => x.classList.toggle("active", x === b));
-      document.getElementById("doc-box").innerHTML = DATA.methods[+b.dataset.i].html;
-    });
-    document.querySelectorAll("#sys-box .doc-tab")[0].classList.add("active");
-  } else if (which === "map") {
-    box.innerHTML = '<div class="doc">' + DATA.map_html + "</div>" +
-      '<details style="margin-top:12px"><summary>逐文件清单（' + DATA.sources.length + " · 完整状态）</summary>" +
-      '<table><thead><tr><th>层</th><th>文件</th><th>性质</th><th>状态</th></tr></thead><tbody>' +
-      DATA.sources.map(s =>
-        "<tr><td>" + esc(s.layer) + "</td><td><code>" + esc(s.path) + "</code></td><td>" + esc(s.nature) + "</td><td>" + statusBadge(s.status) + "</td></tr>"
-      ).join("") + "</tbody></table></details>";
-  } else if (which === "fourq") {
-    const qs = [
-      ["服务哪个终极指标？", "说不出 = 这步可能在偏"],
-      ["完工判据是什么？（不能是过程量）", "如：客户真机 5 分钟跑通"],
-      ["胃口多少？（愿意花多少，不是估多久）", "如：两天 / ￥50"],
-      ["到期没做完怎么办？", "默认作废，不默认延期"],
-    ];
-    box.innerHTML = qs.map((q, i) =>
-      '<label class="q-label"><strong>' + (i + 1) + ". " + esc(q[0]) + "</strong>" +
-      '<input data-q="' + i + '" placeholder="' + esc(q[1]) + '"></label>').join("") +
-      '<div class="filter-row"><button class="chip-btn" id="q-check">✅ 检查</button></div>' +
-      '<div id="q-result"></div>';
-    document.getElementById("q-check").onclick = () => {
-      const missing = [];
-      for (let i = 0; i < 4; i++) {
-        if (!document.querySelector('[data-q="' + i + '"]').value.trim()) missing.push(i + 1);
-      }
-      document.getElementById("q-result").innerHTML = missing.length
-        ? '<div class="bad-box">✗ 缺第 ' + missing.map(n => "<b>" + n + "</b>").join("、") + " 问——答完再开工</div>"
-        : '<div class="ok-box">✓ 四问齐，可以开工。</div>';
-    };
   } else {
     // ⛔ 这页原来只写「clone skills 仓库 → python install.py → python dashboard.py」——
     //    对下载 exe 用的人**直接是错的**：他手上根本没有源码，也没装 Python。
     //    绝大多数用户走的是 exe 那条路，所以先写它。
     const roots = DATA.root_status;
+    // 「方法」页去掉了：那四篇是**给 AI 读的文件**，不是给人在网页里翻的——
+    // 用户的路径是「复制继续做指令 → 粘给 AI」，AI 自己去读那些 md。
+    // 但不能就此藏起来：「记忆归你」是产品第一承诺，得让人知道东西在哪、能自己改。
+    const skills = (roots.find(r => r.alias === "SKILLS") || {}).path || "";
     box.innerHTML =
-      "<h3>用 exe 的</h3>" +
+      "<h3>你的东西在哪</h3>" +
+      '<p class="muted-note">全都是纯文本文件，随时可以自己打开看、自己改。灵台只读它们，不锁着。</p>' +
+      '<ul class="steps">' +
+      "<li><b>方法论</b>（AI 干活时读的规矩：常驻薄核 / 道法术 / 项目交付法 / 核心大脑）" +
+      "<br><code>" + esc(skills ? skills + "\\project-delivery" : "（本机路径读不到）") + "</code></li>" +
+      "<li><b>你记的坑</b>　<code>" + esc(skills ? skills + "\\project-delivery\\坑库.md" : "—") + "</code></li>" +
+      "<li><b>每个项目自己的六器官</b>　在各项目目录下的 <code>brain\\</code> 里</li>" +
+      "</ul>" +
+      (skills ? '<div class="filter-row"><button class="chip-btn" id="sys-open-method">📂 打开方法论目录</button></div>' : "") +
+      "<h3 style=\"margin-top:18px\">换机</h3>" +
+      "<h4>用 exe 的</h4>" +
       '<ol class="steps">' +
       "<li>把 <code>lingtaios.exe</code> 所在的<b>整个文件夹</b>拷到新机器" +
       '<br><span class="muted-note">里面有你的配置、方法论文件和记下的坑。' +
       "只拷 exe 等于重新开始。</span></li>" +
       "<li>双击它，接着用</li></ol>" +
-      "<h3>用源码的</h3>" +
+      "<h4>用源码的</h4>" +
       '<ol class="steps">' +
       "<li>clone 仓库到新机器</li>" +
       "<li><code>python -X utf8 install.py</code></li>" +
@@ -902,6 +884,13 @@ function renderSysTab(which) {
       '<table style="margin-top:10px"><thead><tr><th>位置</th><th>路径</th><th>状态</th></tr></thead><tbody>' +
       roots.map(r => "<tr><td>" + esc(r.alias) + "</td><td><code>" + esc(r.path || "— 未配置") + "</code></td><td>" + statusBadge(r.exists ? "ok" : "noroot") + "</td></tr>").join("") +
       "</tbody></table></details>";
+    const om = document.getElementById("sys-open-method");
+    if (om) {
+      om.onclick = () => fetch("api/open_dir", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: skills + "\\project-delivery" }),
+      });
+    }
   }
 }
 
@@ -1457,8 +1446,9 @@ fetch("data.json")
   .then(r => r.json())
   .then(d => {
     DATA = d;
-    document.getElementById("nav-foot").textContent =
-      "生成 " + d.generated_at + "\n" + d.machine_id;
+    // 侧栏原来印着「生成时间 + machine_id」。时间首页已经有了；machine_id 是给
+    // 多机分数据用的内部标识，用户看了不知道要拿它干什么——去掉，侧栏留给版本号。
+    document.getElementById("nav-foot").textContent = "";
     // 第一次打开：先问清楚你的项目在哪，别拿探测结果替用户做主
     if (d.first_run && location.hash !== "#skip-setup") { renderSetup(); return; }
     // 直达链接：#home / #projects / #pitfall / #detail=<项目名>（录 demo 与分享用）
