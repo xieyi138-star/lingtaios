@@ -2300,7 +2300,7 @@ def _seed_repo():
         print("[保留] %d 个你改过的文件没被覆盖（新版内容不同）：%s" % (len(kept), "、".join(kept[:5])))
     if pending:
         print("[待定] %d 个文件是更早版本装的、认不出来历，没动：%s" % (len(pending), "、".join(pending[:5])))
-        print("       要不要换成新版，去 设置 → 整理 → 🔧 体系自检 里决定（覆盖前会留 .bak）")
+        print("       要不要换成新版，去 我的文件 → 🔧 要你裁决的 里决定（覆盖前会留 .bak）")
 
 
 def main():

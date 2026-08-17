@@ -55,10 +55,13 @@ checks = [
     ("开发者 VX 在侧栏", "开发者 VX" in html and "nexusaistart" in html),
     ("复制是真 button", '<button type="button" class="dev-copy"' in html),
     ("复制功能已接线", 'dev-copy' in js and 'copyText' in js),
-    # 导航 = 首页 / 项目库 / 设置。设置以前**没有常驻入口**，只能从首页正文里
-    # 一行链接进去——人在项目库页想改设置得先回首页。它是用户自己的东西，
-    # 该在导航里。这条真正要守的是下面那句「坑库不在侧栏」（那是机器的索引）。
-    ("导航是 3 项（首页/项目库/设置）", html.count('class="nav-btn" data-page=') == 3),
+    # 导航 = 首页 / 项目库 / 我的文件。这条真正要守的是下面那句
+    # 「坑库不在侧栏」（那是机器的索引）。
+    # ⛔ 第三项不叫「设置」：那一页里大部分是维护者的工作台，不是用户的设置
+    #    （它自己的折叠区都写着「一般不用管」）。用户来这页只为两件事：
+    #    我的东西在哪、换机怎么办。名字得说的是那两件。
+    ("导航是 3 项（首页/项目库/我的文件）", html.count('class="nav-btn" data-page=') == 3),
+    ("第三项叫「我的文件」不叫「设置」", '>我的文件</button>' in html),
     ("坑库不在侧栏", 'data-page="pitfall"' not in html),
     # 坑库的入口是首页那个「经验库 N」大格子：点数字进去，数字和动作合在一处
     ("首页经验库格子可点进坑库", "h-tile-pitfall" in js and "tile.clickable" in css),

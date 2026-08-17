@@ -914,7 +914,10 @@ function renderEvolutionInto(box) {
     seedHtml += "</div>";
   }
 
-  let html = '<p class="muted-note">每周看一次。勾选 → 点删除，对应的记录会从文件里删掉。</p>';
+  /* ⛔ 这里原来写「每周看一次」——给用户派了一件定期维护的活，他不会去做，
+     而且这一屏当时是设置页的默认页。现在它收在「要你裁决的」折叠区里，
+     没事根本不渲染；出现即有事，不用再要求谁定期来看。 */
+  let html = '<p class="muted-note">勾选 → 点删除，对应的记录会从文件里删掉。</p>';
   let any = false;
   for (const s of secs) {
     if (!s[1].length) continue;
@@ -1029,24 +1032,20 @@ function renderEvolutionInto(box) {
   }
 }
 
-/* ---------- 设置页：整理 / 方法 / 换机 ---------- */
+/* ---------- 我的文件 ---------- */
 function renderSystem() {
-  // ⛔ 这里只放用户平常真会用的。删过的：
-  //   「开工四问」——实测填满四格、点「检查」，它只判断有没有填，内容一个字不看，
-  //     不落盘、切个 tab 回来就全空了。而「想清楚再开工」这件事，新项目向导里的
-  //     「终极之果（至少填 1 行）」和「红线」是真落盘的，那才是执行点。
-  //   「装配图」页——tab 栏里根本没有它的按钮，是够不到的死代码。
-  let html = '<div class="section"><h2>设置</h2>' +
-    '<div class="doc-tabs">' +
-    '<button class="doc-tab stab active" data-s="evolve">整理</button>' +
-    '<button class="doc-tab stab" data-s="portable">换机 / 我的文件</button>' +
-    '</div><div id="sys-box"></div></div>';
-  main.innerHTML = html;
-  document.querySelectorAll(".stab").forEach(b => b.onclick = () => {
-    document.querySelectorAll(".stab").forEach(x => x.classList.toggle("active", x === b));
-    renderSysTab(b.dataset.s);
-  });
-  renderSysTab("evolve");
+  /* ⛔ 这一页原来叫「设置」，两个 tab：整理 / 换机。逐项问「用户会据此做什么」之后
+     发现**大部分根本不是设置，是维护者的工作台**：
+       · 「每周看一次，勾选 → 点删除」——要求用户定期做维护，他不会；
+       · 「交接超 7 天没更新」——首页「先看这里」已经有同一条，重复；
+       · 候选删除 / C 类到期 / 判据强度 / 待补判据 / 真源在位 / 断头双份
+         ——全是维护坑库和体系的人才看的；
+       · 「🔧 体系自检」的标签自己写着**「一般不用管」**——那它凭什么占一屏。
+     用户真要的只有两件：**我的东西在哪**（「记忆归你」的兑现处）、**换机怎么办**。
+     加上一件要他裁决的：出厂文件要不要升级。
+     所以：页名改成「我的文件」，维护那堆收进底部折叠区，**没事时整块不渲染**。 */
+  main.innerHTML = '<div class="section"><h2>我的文件</h2><div id="sys-box"></div></div>';
+  renderSysTab("portable");
 }
 
 function renderSysTab(which) {
@@ -1097,7 +1096,28 @@ function renderSysTab(which) {
       "扫描位置（这台机器上灵台会去哪些目录找项目）</span></summary>" +
       '<table style="margin-top:10px"><thead><tr><th>位置</th><th>路径</th><th>状态</th></tr></thead><tbody>' +
       roots.map(r => "<tr><td>" + esc(r.alias) + "</td><td><code>" + esc(r.path || "— 未配置") + "</code></td><td>" + statusBadge(r.exists ? "ok" : "noroot") + "</td></tr>").join("") +
-      "</tbody></table></details>";
+      "</tbody></table></details>" +
+      /* 维护区：⛔ **没事就整块不渲染**。以前它常年占着「整理」那一整个 tab，
+         标签还写着「一般不用管」——那就等于告诉用户「这一屏你可以不看」，
+         而它却是设置页的默认页。有事才出现，出现即有事。 */
+      '<div id="sys-maint"></div>';
+    /* 有几件事是真需要人裁决的（出厂文件要不要升级、哪条坑该退休），
+       只有它们非空时才把维护区渲染出来。 */
+    const ev2 = DATA.evolution || {};
+    const maintN = (ev2.seed_pending || []).length + (ev2.seed_kept || []).length +
+      (ev2.candidates || []).length + (ev2.expired_todos || []).length +
+      (ev2.weak_criteria || []).length + (ev2.missing_invalid || []).length +
+      (ev2.broken || []).length + (ev2.identical_pairs || []).length +
+      (DATA.sync || []).length;
+    if (maintN) {
+      const mb = document.getElementById("sys-maint");
+      // ⛔ 副标题别再写「平时不用管」——那是在告诉用户这一屏可以不看，
+      //    而它现在**只在真有事时才出现**。该说的是里面是什么。
+      mb.innerHTML = '<details style="margin-top:18px"><summary><b>🔧 要你裁决的（' + maintN +
+        '）</b><span class="muted-note"> · 出厂文件要不要升级 / 哪条记录该退休 / 体系一致性</span>' +
+        '</summary><div id="sys-maint-box" style="margin-top:10px"></div></details>';
+      renderEvolutionInto(document.getElementById("sys-maint-box"));
+    }
     const om = document.getElementById("sys-open-method");
     if (om) {
       om.onclick = () => fetch("api/open_dir", {
