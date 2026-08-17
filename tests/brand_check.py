@@ -62,6 +62,11 @@ checks = [
     #    我的东西在哪、换机怎么办。名字得说的是那两件。
     ("导航是 3 项（首页/项目库/我的文件）", html.count('class="nav-btn" data-page=') == 3),
     ("第三项叫「我的文件」不叫「设置」", '>我的文件</button>' in html),
+    # ⛔ 反馈出口用 hidden 属性控制显隐，而 .dev-feedback 写了 display:block——
+    #    优先级压过浏览器给 [hidden] 的 display:none，`el.hidden = true` 会**静默失效**。
+    #    实测：全新安装、一个项目都没有时，「这东西帮到你了？」照样挂在侧栏，
+    #    而那正是它最不该出现的时候（没被帮到过，问了也没有信息量）。
+    ("反馈出口的 hidden 真能藏住（有 [hidden] 规则）", ".dev-feedback[hidden]" in css),
     ("坑库不在侧栏", 'data-page="pitfall"' not in html),
     # 坑库的入口是首页那个「经验库 N」大格子：点数字进去，数字和动作合在一处
     ("首页经验库格子可点进坑库", "h-tile-pitfall" in js and "tile.clickable" in css),
