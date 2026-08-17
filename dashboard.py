@@ -140,28 +140,15 @@ SCAFFOLD_FILES = ["00_宪法.md", "01_法典.md", "03_在建.md", "04_待办池.
                   "05_交接.md", "06_提案层.md", "关口清单.md", "规则台账.md", "状态生成器.py"]
 
 
-def api_templates():
-    """把**方法**交给一个还没绑定项目的 AI。开工用的不是这个，见 api_project_detail 的 resume。
-
-    ⛔ 这段以前混进了 `读本项目 brain\\01_法典.md`、`更新进 brain\\05_交接.md`。
-       「本项目」是哪个？没说。`brain\\...` 是没有根的相对路径——粘给 AI，
-       它只能反问「哪个项目」或者在当前目录瞎猜。而它当时挂在首页**最显眼的
-       主按钮**上，叫「复制开窗三句话」（实际四行）。
-       开工必须绑定到一个具体项目，那件事由项目详情页的「继续做」指令负责，
-       它给的是完整绝对路径。这里只留**不需要项目也成立**的两步。
-    """
-    card = os.path.join(HERE, "AI开窗必读.md")
-    open_text = (
-        "1. 先读 %s（AI开窗必读，照做开窗五步）\n"
-        "2. 每段回复第一行打证据头：先用工具读出真实状态再说，没查过就标「无证据」；\n"
-        "   不可逆动作先出施工图等我拍板\n"
-        "（要接着做某个具体项目：打开灵台 → 点那个项目 → 「复制『继续做』指令」，"
-        "那份带着这台机器上的真实路径）"
-    ) % card
-    # ⛔ 这里以前还返回一份 close_text（收窗四步）。它在界面里**一次都没被用过**——
-    #    死代码。而且它同样犯了「brain\05_交接.md 没有根」的毛病。收窗那件事
-    #    已经写在「继续做」指令的最后一步里（带绝对路径），不需要第二份。
-    return {"ok": True, "open": open_text, "paths": {"card": card, "map": MAP}}
+# api_templates() 删了。它出过三版，每一版都在给「一段通用的、不绑项目的开工话术」
+# 找存在理由，而它一直没有：
+#   · 第一版混进 `读本项目 brain\01_法典.md`——「本项目」是哪个没说，是个没有根的
+#     相对路径，粘给 AI 只能反问或瞎猜；而它当时挂在首页最显眼的主按钮上；
+#   · 顺手返回的 close_text（收窗四步）在界面里一次都没被调用过；
+#   · 改成只剩「先读接入卡 + 打证据头」并收进「我的文件」之后——
+#     不懂技术的用户根本不会用它，摆在那儿只是负担。
+# 开工从头到尾只有一条正路：点项目 →「复制『继续做』指令」（带绝对路径）。
+# **一个功能三次找不到用户，就是它不该存在。**
 
 
 def _sandbox_marker(roots):
@@ -2092,7 +2079,6 @@ def serve(open_browser):
                 self._json(400, {"ok": False, "error": "请求不是合法 JSON"})
                 return
             routes = {
-                "/api/templates": lambda: (200, api_templates()),
                 "/api/create_project": lambda: api_create_project(data),
                 "/api/run_generator": lambda: api_run_generator(data),
                 "/api/apply_seed_update": lambda: api_apply_seed_update(data),
@@ -2415,9 +2401,10 @@ def main():
         ck(len(data["methods"]) == 4 and all(m["ok"] for m in data["methods"]),
            "方法论四篇都在位", "缺：%s" % [m["name"] for m in data["methods"] if not m["ok"]])
         ck(any("{NEXUS}/00_core/装配图.md" in s["path"] for s in data["sources"]), "00_core 装配图指针已登记")
-        t = api_templates()
-        ck(t["ok"] and "AI开窗必读" in t["open"] and os.path.isfile(t["paths"]["card"]),
-           "开窗指令模板含真实路径")
+        # 接入卡必须真的躺在 exe 旁边——「继续做」指令第一步就是让 AI 去读它，
+        # 文件不在，那条指令粘出去就是让对方读一个不存在的文件。
+        # （原本这条是通过 api_templates() 间接验的，那个接口已随界面一起删了。）
+        ck(os.path.isfile(os.path.join(HERE, "AI开窗必读.md")), "接入卡在 exe 旁边")
         st, payload = api_create_project({"name": "../evil", "root_choice": "nexus"})
         ck(st == 400, "项目名非法被拒（../evil → %s）" % st)
         sandbox_path = os.path.join(roots.get("NEXUS") or "", "sandbox")

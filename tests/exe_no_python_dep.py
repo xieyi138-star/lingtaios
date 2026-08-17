@@ -122,14 +122,14 @@ def main():
         results.append(("而且给了 --regen 或界面按钮这条活路",
                         ("--regen" in resume) or ("重算状态" in resume)))
 
-        # 通用文案（设置 → 换机/我的文件 里那份）同样不许出现 python 命令，
-        # 也不许再混进 `brain\...` 这种没有根的相对路径——那是开不了工的东西。
-        st, t = post("api/templates", {})
-        op = (t or {}).get("open", "")
-        results.append(("拿到了通用文案（%d 字）" % len(op), st == 200 and len(op) > 40))
-        results.append(("通用文案里没有 python 命令", "python" not in op.lower()))
-        results.append(("通用文案里没有没根的 brain\\ 相对路径",
-                        "brain\\01_" not in op and "brain\\05_" not in op))
+        # ⛔ 「继续做」指令里的每条路径都必须是绝对路径。曾经有一份通用话术写着
+        #    `读本项目 brain\01_法典.md`——「本项目」是哪个没说，粘给 AI 只能瞎猜。
+        #    那份话术已经整个删掉（api_templates 连接口一起没了），但这条得留着：
+        #    resume 里再出现没有盘符的 brain\ 相对路径，就是同一个错又回来了。
+        bare = [ln for ln in resume.splitlines()
+                if "brain\\" in ln and ":\\" not in ln]
+        results.append(("指令里没有没根的 brain\\ 相对路径" +
+                        ("" if not bare else "（实际：%s）" % bare[0][:80]), not bare))
     finally:
         if proc:
             proc.terminate()

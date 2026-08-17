@@ -77,11 +77,14 @@ if up:
             routes_ok.append((p or "/", "ERR", repr(e)[:40]))
     rec("7 GET routes", all(r[1] == 200 for r in routes_ok), str(routes_ok))
 
+    # api/templates 删了（那段通用开工话术三次找不到用户）。这一格换成 refresh：
+    # 同样是「无参数 POST 走不走得通」，而且它是界面上「🔄 重新扫描」真在调的。
     try:
-        st, d = post("api/templates", {})
-        rec("7 POST api/templates", st == 200, "HTTP %s keys=%s" % (st, list(d)[:4]))
+        st, d = post("api/refresh", {}, timeout=90)
+        rec("7 POST api/refresh", st == 200 and d.get("generated_at"),
+            "HTTP %s keys=%s" % (st, list(d)[:4]))
     except Exception as e:
-        rec("7 POST api/templates", False, repr(e)[:60])
+        rec("7 POST api/refresh", False, repr(e)[:60])
     try:
         st, d = post("api/project_detail", {"path": BC})
         rec("7 POST api/project_detail", st == 200 and d.get("ok"), "HTTP %s ok=%s organs=%s" % (st, d.get("ok"), len(d.get("organs", {}))))

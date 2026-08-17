@@ -9,16 +9,10 @@ function esc(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function statusBadge(status) {
-  const map = {
-    ok: ["good", "✓ 在位"],
-    missing: ["bad", "✗ 缺失"],
-    noroot: ["muted", "— 本机无此根"],
-    absent: ["muted", "— 本机无此件"],
-  };
-  const [cls, label] = map[status] || ["muted", esc(status)];
-  return '<span class="chip ' + cls + '">' + label + "</span>";
-}
+/* statusBadge（✓在位 / ✗缺失 / —本机无此根）删了：它唯一的用处是渲染
+   「扫描位置」那张别名表，而那张表是内部概念（SKILLS/NEXUS/D/HOME），
+   已经从「我的文件」里撤掉——项目没出现时的解法是首页「添加已有项目」，
+   不是让用户去读一张根别名表。 */
 
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; }
@@ -894,16 +888,16 @@ function renderEvolutionInto(box) {
   const seedKept = ev.seed_kept || [];
   let seedHtml = "";
   if (seedPending.length || seedKept.length) {
-    seedHtml = '<div class="section"><h3>📦 出厂文件的升级</h3>';
+    seedHtml = '<div class="section"><h3>📦 灵台自带的文件，有新版了</h3>';
     if (seedKept.length) {
       seedHtml += '<p class="muted-note">这 ' + seedKept.length +
-        " 个你改过，新版**没有**覆盖（你的改动优先）：<br>" +
+        " 个你自己改过，所以<b>没动它</b>——你的改动优先：<br>" +
         seedKept.map(k => "<code>" + esc(k) + "</code>").join("、") + "</p>";
     }
     if (seedPending.length) {
       seedHtml += '<p class="muted-note">这 ' + seedPending.length +
-        " 个是更早版本装的，认不出来历，所以没动。要换成新版就勾上——" +
-        "<b>覆盖前会在同目录留一份 .bak</b>。</p>" +
+        " 个是旧版本装的，灵台认不出你有没有改过，所以没敢动。想换成新版就勾上——" +
+        "<b>换之前会在旁边留一份备份（.bak）</b>，反悔了能拿回来。</p>" +
         seedPending.map((k, i) =>
           '<label class="q-label inline"><input type="checkbox" class="seed-pick" data-k="' +
           esc(k) + '" id="seed-' + i + '"> <code>' + esc(k) + "</code></label>").join("") +
@@ -1061,42 +1055,28 @@ function renderSysTab(which) {
     // 用户的路径是「复制继续做指令 → 粘给 AI」，AI 自己去读那些 md。
     // 但不能就此藏起来：「记忆归你」是产品第一承诺，得让人知道东西在哪、能自己改。
     const skills = (roots.find(r => r.alias === "SKILLS") || {}).path || "";
+    /* ⛔ 这一页按「一个完全不懂技术的人」重写过。原来的毛病逐条：
+         · 「纯文本文件」「方法论」「六器官」「brain\」「方法体系」——他一个都不懂；
+         · 列了四个内部文件名（常驻薄核/道法术/项目交付法/核心大脑）——书名一样，看不懂；
+         · 甩一长串 C:\Users\...\dist\project-delivery 让他自己看——他要的是「打开」；
+         · **整整一段「用源码的：clone 仓库 / python install.py」**——他根本不需要，
+           摆在那儿只会让他以为自己少做了一步、是不是还得装 Python。开发者看 README。
+       重写的判据：说他**会失去什么**，不说文件叫什么；能给按钮就不给路径；
+       想看细节的自己点开。 */
     box.innerHTML =
-      "<h3>你的东西在哪</h3>" +
-      '<p class="muted-note">全都是纯文本文件，随时可以自己打开看、自己改。灵台只读它们，不锁着。</p>' +
-      '<ul class="steps">' +
-      "<li><b>方法论</b>（AI 干活时读的规矩：常驻薄核 / 道法术 / 项目交付法 / 核心大脑）" +
-      "<br><code>" + esc(skills ? skills + "\\project-delivery" : "（本机路径读不到）") + "</code></li>" +
-      "<li><b>你记的坑</b>　<code>" + esc(skills ? skills + "\\project-delivery\\坑库.md" : "—") + "</code></li>" +
-      "<li><b>每个项目自己的六器官</b>　在各项目目录下的 <code>brain\\</code> 里</li>" +
-      "</ul>" +
-      /* 「把方法交给一个还没绑项目的 AI」原来挂在首页主按钮上，叫「复制开窗三句话」，
-         但它混进了 `读本项目 brain\01_法典.md` 这种没有根的相对路径，开不了工。
-         开工归项目详情页的「继续做」指令（带绝对路径）；这份只剩「先读接入卡 +
-         打证据头」，属于「我的文件」这一页，不该占首页主位。 */
-      (skills ? '<div class="filter-row"><button class="chip-btn" id="sys-open-method">📂 打开方法论目录</button>' +
-        '<button class="chip-btn" id="sys-copy-open">📋 复制「让 AI 先学会这套方法」</button></div>' +
-        '<p class="muted-note" id="sys-copy-note">要接着做某个具体项目，别用这个——' +
-        "去项目页点「复制『继续做』指令」，那份带着这台机器上的真实路径。</p>" : "") +
-      "<h3 style=\"margin-top:18px\">换机</h3>" +
-      "<h4>用 exe 的</h4>" +
-      '<ol class="steps">' +
-      "<li>把 <code>lingtaios.exe</code> 所在的<b>整个文件夹</b>拷到新机器" +
-      '<br><span class="muted-note">里面有你的配置、方法论文件和记下的坑。' +
-      "只拷 exe 等于重新开始。</span></li>" +
-      "<li>双击它，接着用</li></ol>" +
-      "<h4>用源码的</h4>" +
-      '<ol class="steps">' +
-      "<li>clone 仓库到新机器</li>" +
-      "<li><code>python -X utf8 install.py</code></li>" +
-      "<li><code>python -X utf8 dashboard.py</code></li></ol>" +
-      '<p class="muted-note">项目本身留在原机（业务数据不搬）；方法体系跟着走。</p>' +
-      // 别名表是内部概念（{SKILLS}/{NEXUS}/{D}/{HOME}），收起来
-      '<details style="margin-top:12px"><summary><span class="muted-note">' +
-      "扫描位置（这台机器上灵台会去哪些目录找项目）</span></summary>" +
-      '<table style="margin-top:10px"><thead><tr><th>位置</th><th>路径</th><th>状态</th></tr></thead><tbody>' +
-      roots.map(r => "<tr><td>" + esc(r.alias) + "</td><td><code>" + esc(r.path || "— 未配置") + "</code></td><td>" + statusBadge(r.exists ? "ok" : "noroot") + "</td></tr>").join("") +
-      "</tbody></table></details>" +
+      '<p>你的东西全在这台电脑上，灵台<b>不往外传</b>。用记事本就能打开、自己改。</p>' +
+      (skills ? '<div class="filter-row"><button class="chip-btn primary" id="sys-open-method">📂 打开我的文件夹</button></div>' : "") +
+      "<h3 style=\"margin-top:20px\">换新电脑</h3>" +
+      "<p>把 <code>lingtaios.exe</code> <b>所在的整个文件夹</b>拷过去，双击接着用。</p>" +
+      '<p class="muted-note">⛔ 只拷 <code>lingtaios.exe</code> 这一个文件 = 你记的东西全没了<br>' +
+      "你的项目文件不用搬，还在原来的地方。</p>" +
+      /* ⛔ 这里删掉的东西，删的理由都是同一条：**展示出来对用户是负担**。
+           · 文件清单（规矩/坑/项目资料）——他点了「打开我的文件夹」自己就看见了，
+             写成清单是盘点，不是他要做的事；
+           · 一长串路径——有按钮就不需要路径；
+           · 「扫描位置」表——项目没出现时的解法是首页「添加已有项目」，不是让他读这张表；
+           · 「复制一段话让 AI 学方法」——傻瓜路径上没人会用它，连后端接口一起删了，
+             否则又是一处没人调用的死代码。 */
       /* 维护区：⛔ **没事就整块不渲染**。以前它常年占着「整理」那一整个 tab，
          标签还写着「一般不用管」——那就等于告诉用户「这一屏你可以不看」，
          而它却是设置页的默认页。有事才出现，出现即有事。 */
@@ -1112,9 +1092,10 @@ function renderSysTab(which) {
     if (maintN) {
       const mb = document.getElementById("sys-maint");
       // ⛔ 副标题别再写「平时不用管」——那是在告诉用户这一屏可以不看，
-      //    而它现在**只在真有事时才出现**。该说的是里面是什么。
-      mb.innerHTML = '<details style="margin-top:18px"><summary><b>🔧 要你裁决的（' + maintN +
-        '）</b><span class="muted-note"> · 出厂文件要不要升级 / 哪条记录该退休 / 体系一致性</span>' +
+      //    而它现在**只在真有事时才出现**。该说的是里面是什么，而且用人话：
+      //    「裁决」「体系一致性」这种词，不懂技术的人读不出要他干什么。
+      mb.innerHTML = '<details style="margin-top:18px"><summary><b>🔧 要你决定的（' + maintN +
+        '）</b><span class="muted-note"> · 灵台自带的文件要不要换新版、哪些旧记录可以删了</span>' +
         '</summary><div id="sys-maint-box" style="margin-top:10px"></div></details>';
       renderEvolutionInto(document.getElementById("sys-maint-box"));
     }
@@ -1124,16 +1105,6 @@ function renderSysTab(which) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: skills + "\\project-delivery" }),
       });
-    }
-    const co = document.getElementById("sys-copy-open");
-    if (co) {
-      co.onclick = async () => {
-        const t = await post("api/templates", {});
-        const note = document.getElementById("sys-copy-note");
-        note.textContent = (t.open && await copyText(t.open))
-          ? "✓ 已复制——粘给任何 AI，它会先去读接入卡、学会这套做事方法。"
-          : "✗ 复制失败";
-      };
     }
   }
 }

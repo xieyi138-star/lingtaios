@@ -61,7 +61,6 @@ def collect(rf, proj):
                                           timeout=25).read().decode("utf-8"))
     h = d["health"]
     st_detail, r_detail = post("api/project_detail", {"path": proj})
-    st_tpl, r_tpl = post("api/templates", {})
     st_browse, r_browse = post("api/browse", {"path": os.path.dirname(proj)})
     st_find, r_find = post("api/find_projects", {"locations": [os.path.dirname(proj)], "depth": 2})
     return {
@@ -76,9 +75,9 @@ def collect(rf, proj):
         "详情页 HTTP": st_detail,
         "详情页 ok": r_detail.get("ok"),
         "详情页器官数": len(r_detail.get("organs") or {}),
+        # api/templates 删了（那段通用开工话术三次找不到用户）。两态一致性该比的是
+        # 用户真会用的那份——「继续做」指令，它上面一行已经在比了。
         "继续做指令有内容": bool((r_detail.get("resume") or "").strip()),
-        "开窗模板 HTTP": st_tpl,
-        "开窗模板有内容": bool((r_tpl.get("open") or "").strip()),
         "浏览 HTTP": st_browse,
         "浏览到的子目录数": len(r_browse.get("dirs") or []),
         "扫描 HTTP": st_find,
