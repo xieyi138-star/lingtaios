@@ -104,12 +104,13 @@ function renderProjectDetail(d) {
            : '<span class="chip muted">未装系统</span>') + "</div>" +
     '<p class="muted-note"><code>' + esc(d.path) + "</code></p>" +
     '<div class="filter-row">' +
+    /* 顺序就是流程：**先重算、再复制**。
+       创始人真开工时就是复制完直接干，从没看见「重算状态」那个按钮——
+       它当时排在第三个。按钮的先后本身在教人下一步做什么，摆错了就是没教。
+       （样式上仍让「复制」当主按钮：它才是这一页的产出。） */
+    (d.has_brain ? '<button class="chip-btn" id="pd-regen">🔄 重算状态</button>' : "") +
     '<button class="chip-btn primary" id="pd-resume">📋 复制「继续做」指令</button>' +
     '<button class="chip-btn" id="pd-open">📁 打开项目目录</button>' +
-    /* 后端 /api/run_generator 一直都在，前端从来没调用过——能力有、够不着。
-       对只用 exe 的人这是个断掉的闭环：建项目时状态自动生成，之后再没法重算，
-       而文档给的办法是跑 python，他机器上可能根本没有。 */
-    (d.has_brain ? '<button class="chip-btn" id="pd-regen">🔄 重算状态</button>' : "") +
     '<button class="chip-btn" id="pd-remove">🗂 移出项目库</button></div>' +
     /* 状态多老要写出来，并且就写在「重算」按钮旁边——把「该按了」和「怎么按」
        放在同一处，否则用户看到按钮也不知道现在该不该按。 */

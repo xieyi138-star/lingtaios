@@ -1683,29 +1683,47 @@ def api_project_detail(data):
                       "（一行 JSON：{\"t\":时间,\"act\":动作,\"ev\":证据,\"res\":结果}；目录不存在就建）" % trace_file)
     else:
         trace_step = None
-    steps = [
-        "项目：%s（%s）" % (detail["name"], path),
-        "1. 先读 %s（AI开窗必读，照做开窗五步）" % card,
-        "2. %s" % step2,
-        "3. 每完成一个完整任务段，%s（不要等收窗；我随时会离开，进度必须在文件里）" % seg,
-    ]
+    # ⛔ 编号一律最后统一生成。原来是手写「1.」「2.」再用 n/n+1/n+2 往后接，
+    #    往中间插一步就要重排一遍，插错了没人发现——编号错乱的指令 AI 会照着乱做。
+    body = []
+    # ⛔ 状态旧了就让 AI **自己先重算**，别指望人记得去点那个按钮。
+    #    这一条是被真实用过的一次开工打脸打出来的：项目卡上明明写着「状态 1 天前」、
+    #    详情页也有「🔄 重算状态」，但创始人复制的是**这段指令**，不是界面——
+    #    他粘完就开工了，从头到尾没看见那个按钮。
+    #    「没人告诉你该按，按钮就等于不存在」这句话，我在项目卡和详情页各兑现了一次，
+    #    唯独漏了用户真正会读的这一处。
+    #    ⚠️ 只在真旧了才加：状态是今天算的还让 AI 再跑一遍，就是噪音，
+    #       而噪音会让人（和 AI）学会跳过开头几步。
+    age = detail.get("state_age_days")
+    if detail["has_brain"] and (detail.get("state_at") is None or detail.get("state_at") == ""
+                                or (isinstance(age, int) and age >= 1)):
+        how = ('"%s" --regen "%s"' % (os.path.abspath(sys.executable), brain)) if _FROZEN \
+            else ("python -X utf8 状态生成器.py（在 %s 目录）" % brain)
+        why = ("这个项目的状态还没生成过" if not detail.get("state_at")
+               else "磁盘上那份状态是 %d 天前算的" % age)
+        body.append("**先重算状态**：%s\n   （%s——直接读会把旧数字当成现在的，"
+                    "而它不会报错）" % (how, why))
+    body.append("先读 %s（AI开窗必读，照做开窗五步）" % card)
+    body.append(step2)
+    body.append("每完成一个完整任务段，%s（不要等收窗；我随时会离开，进度必须在文件里）" % seg)
     if trace_step:
-        steps.append("4. %s" % trace_step)
-    n = len(steps)          # 已有几步，后面接着编号，别写死 4/5/6
-    steps.append("%d. 每段回复第一行打证据头；不可逆动作先出施工图等我拍板" % n)
+        body.append(trace_step)
+    body.append("每段回复第一行打证据头；不可逆动作先出施工图等我拍板")
     # ⛔ 「用的人越多方法越准」这句话，瓶颈从来不在人愿不愿意，而在**麻烦**：
     #    判断一条坑通不通用、写成规范格式、开个 issue——90% 的人不会为别人多走这几步
     #    （90-9-1 定律）。但灵台的用户不是一个人，是「人 + AI」，而 AI 不嫌麻烦。
     #    所以把判断和起草都交给 AI，人只剩下「看一眼、点一下」。
     draft = os.path.join(path, "贡献草稿.md")
-    steps.append(
-        "%d. 这次要是踩了新坑：按「一句话坑 / 防法（照做即可）/ 失效判据（防的事被结构性"
+    body.append(
+        "这次要是踩了新坑：按「一句话坑 / 防法（照做即可）/ 失效判据（防的事被结构性"
         "消除即删）」记进本项目的经验记录。记完再自问一句——**换一个项目、换一套技术栈，"
-        "这条还成立吗？** 成立的，另外追加一份到 %s（同样三段格式），收工时告诉我"
-        "「有几条可以贡献回主库」。只在本项目成立的不用写，留着自己用就行。"
-        % (n + 1, draft))
-    steps.append("%d. 收工时：%s" % (n + 2, close_step))
-    detail["resume"] = "\n".join(steps)
+        "这条还成立吗？** 成立的，另外追加一份到 %s（**文件不存在就建**，同样三段格式），"
+        "收工时告诉我「有几条可以贡献回主库」。只在本项目成立的不用写，留着自己用就行。"
+        % draft)
+    body.append("收工时：%s" % close_step)
+    detail["resume"] = "\n".join(
+        ["项目：%s（%s）" % (detail["name"], path)] +
+        ["%d. %s" % (i + 1, s) for i, s in enumerate(body)])
     # 通用件落后检测（v0.7 升级传播）
     scaffold = os.path.join(REPO, "project-delivery", "scaffold")
     detail["outdated"] = [

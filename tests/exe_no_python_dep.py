@@ -130,6 +130,37 @@ def main():
                 if "brain\\" in ln and ":\\" not in ln]
         results.append(("指令里没有没根的 brain\\ 相对路径" +
                         ("" if not bare else "（实际：%s）" % bare[0][:80]), not bare))
+        # 编号必须连续，不能因为往中间插了一步就跳号——乱了 AI 会照着乱做
+        nums = [int(ln.split(".", 1)[0]) for ln in resume.splitlines()
+                if ln[:1].isdigit() and ". " in ln[:4]]
+        results.append(("指令编号连续（%s）" % nums, nums == list(range(1, len(nums) + 1))))
+        # 状态是刚生成的（install_organs 顺手跑过生成器），此时不该有「先重算」那步——
+        # 不旧还让 AI 再跑一遍就是噪音，而噪音会让人和 AI 都学会跳过开头几步
+        results.append(("状态是新的时，指令里**没有**多余的重算步",
+                        "先重算状态" not in resume))
+
+        # ⛔ 造一个「状态从没生成过」的项目：删掉 02_状态.json。
+        #    此时指令**第一步必须是先重算**——否则 AI 读到的是不存在/过期的状态，
+        #    还会把它当成现在的。这条是被真实开工打脸打出来的：项目卡上写着
+        #    「状态 1 天前」、详情页也有按钮，但用户复制的是这段指令、不是界面，
+        #    从头到尾没看见那个按钮。「没人告诉你该按，按钮就等于不存在」。
+        #    ⚠️ 这一步不能省：install_organs 会顺手跑生成器，不删就永远测不到这条分支。
+        try:
+            os.remove(os.path.join(proj, "brain", "02_状态.json"))
+        except OSError:
+            pass
+        st, d2 = post("api/project_detail", {"path": proj})
+        det2 = d2.get("detail") or d2
+        r2 = det2.get("resume") or ""
+        f2 = [ln for ln in r2.splitlines() if ln.startswith("1. ")]
+        results.append(("状态没生成过时，指令第一步就是「先重算状态」" +
+                        ("" if (f2 and "先重算状态" in f2[0]) else "（实际：%s）" % (f2[0][:60] if f2 else "无")),
+                        bool(f2) and "先重算状态" in f2[0]))
+        results.append(("而且那一步给的是 exe 命令，不是 python",
+                        bool(f2) and "python" not in f2[0].lower()))
+        n2 = [int(ln.split(".", 1)[0]) for ln in r2.splitlines()
+              if ln[:1].isdigit() and ". " in ln[:4]]
+        results.append(("插了一步之后编号仍连续（%s）" % n2, n2 == list(range(1, len(n2) + 1))))
     finally:
         if proc:
             proc.terminate()
