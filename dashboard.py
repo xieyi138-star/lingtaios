@@ -226,50 +226,70 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
         red_block = ("🔴 （待填：本项目绝不做的事）" if not retro else
                      "🔴 历史文件先读后改：动任何原文件前，先读相关交接/施工图，改必留痕\n🔴 （待填：本项目绝不做的事）")
 
+    # ⛔ 下面这十来处 .replace 全是「照着出厂模板里的原句去换」。模板哪天改了一个字，
+    #    replace 不会报错、不会抛异常、返回的还是个完整字符串——它只是**什么都没换**，
+    #    于是用户装完打开 00_宪法.md，看到的是 `# 宪法 · <项目名>`。
+    #    「工具返回成功 ≠ 事情做成了」的标准形状。所以每一处都记账，装完统一对账。
+    _misses = []
+
+    def _fill(text, old, new, where):
+        if old not in text:
+            _misses.append(u"%s：模板里找不到要替换的原句「%s」" % (where, old.split("\n")[0][:40]))
+            return text
+        return text.replace(old, new)
+
     const_path = os.path.join(brain, "00_宪法.md")
     with io.open(const_path, encoding="utf-8") as f:
         const = f.read()
-    const = const.replace("# 宪法 · <项目名>", "# 宪法 · " + name)
-    const = const.replace(
-        "| 指标 | 定义 | 谁来测 | 何时测 | 达标线 |\n|---|---|---|---|---|\n| | | | | |",
-        goal_block)
-    const = const.replace("🔴 \n🔴 ", red_block + "\n")
+    const = _fill(const, "# 宪法 · <项目名>", "# 宪法 · " + name, "00_宪法·标题")
+    const = _fill(const,
+                  "| 指标 | 定义 | 谁来测 | 何时测 | 达标线 |\n|---|---|---|---|---|\n| | | | | |",
+                  goal_block, "00_宪法·果五栏")
+    const = _fill(const, "🔴 \n🔴 ", red_block + "\n", "00_宪法·红线")
     _atomic_write(const_path, const)
 
     # 填 01 法典
     codex_path = os.path.join(brain, "01_法典.md")
     with io.open(codex_path, encoding="utf-8") as f:
         codex = f.read()
-    codex = codex.replace("# 法典 · <项目名>", "# 法典 · " + name)
-    codex = codex.replace(
-        "🔴 <绝不做的事 1>\n🔴 <绝不做的事 2>", "🔴 见 00_宪法.md 三 · 红线（不复制，一处真源）")
-    codex = codex.replace("- **文件地图**：<核心文件在哪>", "- **文件地图**：项目根 + `brain/` 六器官（真源导航见装配图）")
-    codex = codex.replace("- **当前阶段目标**：<这一阶段要拿到什么>", "- **当前阶段目标**：见 `03_在建.md` 注-001")
-    codex = codex.replace("- **真源指定**：道=<...> 法=<...> 术=<...> 关键数字=<...>",
-                          "- **真源指定**：道=项目交付法 法=核心大脑六器官 术=坑库（`~/.claude/skills/project-delivery/`，开工前查装配图）")
+    codex = _fill(codex, "# 法典 · <项目名>", "# 法典 · " + name, "01_法典·标题")
+    codex = _fill(codex, "🔴 <绝不做的事 1>\n🔴 <绝不做的事 2>",
+                  "🔴 见 00_宪法.md 三 · 红线（不复制，一处真源）", "01_法典·红线")
+    codex = _fill(codex, "- **文件地图**：<核心文件在哪>",
+                  "- **文件地图**：项目根 + `brain/` 六器官（真源导航见装配图）", "01_法典·文件地图")
+    codex = _fill(codex, "- **当前阶段目标**：<这一阶段要拿到什么>",
+                  "- **当前阶段目标**：见 `03_在建.md` 注-001", "01_法典·阶段目标")
+    codex = _fill(codex, "- **真源指定**：道=<...> 法=<...> 术=<...> 关键数字=<...>",
+                  "- **真源指定**：道=项目交付法 法=核心大脑六器官 术=坑库（`~/.claude/skills/project-delivery/`，开工前查装配图）",
+                  "01_法典·真源指定")
     _atomic_write(codex_path, codex)
 
     # 填 03 在建
     plan_path = os.path.join(brain, "03_在建.md")
     with io.open(plan_path, encoding="utf-8") as f:
         plan = f.read()
-    plan = plan.replace("### 注-001 · <一句话名字>",
-                        "### 注-001 · %s" % ("续做（一键装系统）" if retro else "立项：" + name))
-    plan = plan.replace("| **服务哪个终极指标** | <说不出就不开工> |", "| **服务哪个终极指标** | 见 `00_宪法.md` 一 · 终极之果 |")
+    plan = _fill(plan, "### 注-001 · <一句话名字>",
+                 "### 注-001 · %s" % ("续做（一键装系统）" if retro else "立项：" + name),
+                 "03_在建·注名")
+    plan = _fill(plan, "| **服务哪个终极指标** | <说不出就不开工> |",
+                 "| **服务哪个终极指标** | 见 `00_宪法.md` 一 · 终极之果 |", "03_在建·向果")
     _atomic_write(plan_path, plan)
 
     # 填 05 交接（续装项目：进度接历史 HANDOFF/施工图，不复制内容）
     hand_p = os.path.join(brain, "05_交接.md")
     with io.open(hand_p, encoding="utf-8") as f:
         hand = f.read()
-    hand = hand.replace("**最近一次生成**：<日期>　**有无告警**：<有/无>",
-                        "**最近一次生成**：%s　**有无告警**：看 02_状态.md 顶部" % time.strftime("%Y-%m-%d"))
-    if retro:
-        hand = hand.replace("见 `03_在建.md`。一句话：<...>",
-                            "见 `03_在建.md`。一句话：续做历史项目——原进度与结论在项目根的交接/施工图文档里（驾驶舱详情页可见），本脑从「下一步」接手。")
-    else:
-        hand = hand.replace("见 `03_在建.md`。一句话：<...>",
-                            "见 `03_在建.md`。一句话：新项目立项，从果五栏开工。")
+    # ⛔ 不在这里盖一个日期戳。它从写下那天起就开始过期，而且**不会报错**——
+    #    读的人看见「最近一次生成：8-17」会当真，哪怕状态其实是三周前算的。
+    #    一份知识只能存一处：日期的真源是 02_状态.md 顶部那行，指过去就行。
+    hand = _fill(hand, "**最近一次生成**：<日期>　**有无告警**：<有/无>",
+                 "**最近一次生成 / 有无告警**：看 `02_状态.md` 顶部（机器写的，这里不抄）",
+                 "05_交接·状态指针")
+    hand = _fill(hand, "见 `03_在建.md`。一句话：<...>",
+                 "见 `03_在建.md`。一句话：" + (
+                     "续做历史项目——原进度与结论在项目根的交接/施工图文档里（驾驶舱详情页可见），本脑从「下一步」接手。"
+                     if retro else "新项目立项，从果五栏开工。"),
+                 "05_交接·这一注")
     _atomic_write(hand_p, hand)
 
     # 通用 状态源.json
@@ -285,7 +305,18 @@ def _install_organs_files(target, name, goals=None, redlines=None, retro=False):
         "outcomes": [],
     }
     _atomic_write(os.path.join(brain, "状态源.json"), json.dumps(state_src, ensure_ascii=False, indent=2))
+    # 对账：一处没填上都算装坏了。出厂模板和这段代码是一起发的，对不上必然是我们的 bug——
+    # 所以喊出来（回归里 install_fill.py 直接断言这个列表是空的），但不拦着用户装完。
+    if _misses:
+        print("[!!] 装六器官时有 %d 处出厂模板没填上（模板和代码对不上了）：" % len(_misses))
+        for m in _misses:
+            print("     " + m)
+    _install_misses[:] = _misses
     return brain
+
+
+# 上一次装六器官时有几处模板没填上。给回归用——用户不看这个，但它不能静默。
+_install_misses = []
 
 
 def _alias_row(target, roots):
@@ -1367,6 +1398,8 @@ def _regen_cmd(brain_dir=None):
 
 
 _GEN_LOCK = threading.Lock()
+# 量具在本环境跑不了的 brain 目录：记下来，本次进程不再反复试
+_REGEN_SKIP = set()
 
 
 def _state_age_days(state_json):
@@ -1606,8 +1639,21 @@ def api_run_generator(data):
     if not os.path.isdir(brain):
         return 400, {"ok": False, "error": "没有 brain\\ 目录（先装六器官）"}
     gen = _run_generator(brain)
-    ok = gen.get("exit") == 0
-    return 200 if ok else 500, {"ok": ok, "generator": gen}
+    out = gen.get("out") or ""
+    # ⛔ 「有告警」不是「重算失败」。生成器退出码 1 = 算完了、写下去了、有几条要人裁决；
+    #    以前这里一律判 500，界面就打出「✗ 重算失败」——项目越健康越不会踩到，
+    #    而一个真有红线待裁决的项目，每次点重算都被告知失败，人只会以为按钮坏了。
+    #    判据只有一个：**状态到底写下去了没有**（生成器写成功才打 written:）。
+    if gen.get("exit") == 3:
+        _REGEN_SKIP.add(brain)
+        return 200, {"ok": True, "wrote": False, "tool_broken": True,
+                     "generator": gen}
+    wrote = "written:" in out
+    if not wrote:
+        return 500, {"ok": False, "error": gen.get("error") or "重算没跑成，状态没动",
+                     "generator": gen}
+    n_alarm = sum(1 for ln in out.splitlines() if ln.startswith("ALARM:"))
+    return 200, {"ok": True, "wrote": True, "alarms": n_alarm, "generator": gen}
 
 
 def _read_md(p):
@@ -1723,9 +1769,15 @@ def api_project_detail(data):
         close_step = ("把「做完的 / 没做完的 / 下一步」追加写进 %s（没有就新建）——"
                       "下次双击驾驶舱，详情页就能看到进度") % handoff
     if detail["has_brain"]:
-        trace_file = os.path.join(brain, "traces", time.strftime("%Y-%m-%d") + ".jsonl")
+        # ⛔ 这里绝不能把「今天」算死了写进去。这段文本是**复制走**的：
+        #    今天复制、明天粘进新窗口，AI 就会照着往昨天那个文件里追加，
+        #    而轨迹是按天分文件的——错的那天看起来完全正常，没有任何东西会报错。
+        #    给规则（用开工当天的日期），不给一个会过期的具体值。
+        trace_file = os.path.join(brain, "traces", "<开工当天日期>.jsonl")
         trace_step = ("每完成一段，把「做了什么 / 证据 / 结果」追加一行到 %s"
-                      "（一行 JSON：{\"t\":时间,\"act\":动作,\"ev\":证据,\"res\":结果}；目录不存在就建）" % trace_file)
+                      "（日期用你开工那天的，格式 2026-01-31.jsonl；"
+                      "一行 JSON：{\"t\":时间,\"act\":动作,\"ev\":证据,\"res\":结果}；目录不存在就建）"
+                      % trace_file)
     else:
         trace_step = None
     # ⛔ 编号一律最后统一生成。原来是手写「1.」「2.」再用 n/n+1/n+2 往后接，
@@ -2048,7 +2100,7 @@ def discover_projects(roots, sources):
     projects = []
     # 演练态（--roots-file）一个真项目都不碰——「演练不许碰真源」
     _drill = os.path.normcase(ACTIVE_ROOTS_FILE) != os.path.normcase(ROOTS_FILE)
-    _regened = []
+    _regened, _regen_broken = [], []
     for p in found.values():
         organs = {}
         for o in ORGANS:
@@ -2062,10 +2114,19 @@ def discover_projects(roots, sources):
         #    ⚠️ 只算旧的（≥1 天），新的跳过 → 稳态成本约等于 0
         #       （本机 21 个项目里只有 2 个带状态源，各约 0.2 秒）。
         _b = os.path.join(p, "brain")
-        if not _drill and os.path.isfile(os.path.join(_b, "状态源.json")):
+        if (not _drill and _b not in _REGEN_SKIP
+                and os.path.isfile(os.path.join(_b, "状态源.json"))):
             _age = _state_age_days(os.path.join(_b, "02_状态.json"))
             if _age is None or _age >= 1:
-                if not (_run_generator(_b) or {}).get("error"):
+                _g = _run_generator(_b) or {}
+                # ⛔ 退出码 3 = 量具自己跑不了（缺模块），生成器已经拒绝写盘。
+                #    这种项目在 exe 里永远重算不了（它的探针要 sqlite3/numpy 之类，
+                #    而 exe 只带了生成器自己用到的标准库）。状态会一直是旧的，
+                #    每次扫描都试一遍就是每次都刷一屏无用日志——记下来，本次进程不再试。
+                if _g.get("exit") == 3:
+                    _REGEN_SKIP.add(_b)
+                    _regen_broken.append(os.path.basename(p))
+                elif not _g.get("error"):
                     _regened.append(os.path.basename(p))
         alarms, state, at = [], None, ""
         sj = os.path.join(p, "brain", "02_状态.json")
@@ -2108,6 +2169,11 @@ def discover_projects(roots, sources):
         # 兜底必须出声：动了用户项目里的文件（重算 02_状态），得留下痕迹
         print("[自动重算] %d 个项目的状态是旧的，已重算：%s"
               % (len(_regened), "、".join(_regened[:6])))
+    if _regen_broken:
+        # 兜底必须出声：这些项目的状态它算不了，还是旧的，别让人以为新的
+        print("[重算不了] %d 个项目的探针需要 exe 里没有的模块，状态保留不动：%s"
+              % (len(_regen_broken), "、".join(_regen_broken[:6])))
+        print("        用装了那些模块的 Python 跑：python -X utf8 状态生成器.py --dir <brain目录>")
     projects.sort(key=lambda x: x["name"])
     return projects
 
@@ -2529,6 +2595,20 @@ def main():
         tail = (g.get("out") or "").strip()
         if tail:
             print(tail[-1200:])
+        # 退出码 3 = **量具在这个环境里跑不了**，生成器已经拒绝写入、原状态原样还在。
+        # 这不是「重算失败」，更不是项目出了事——报成 [XX] 会让人以为数据坏了，
+        # 于是去翻项目找原因，而真正要动的是换个装了模块的 Python 跑一次。
+        if g.get("exit") == 3:
+            print("[--] 没有重算，原来的状态一个字都没动。原因和解法见上面几行。")
+            sys.exit(3)
+        # ⛔ 「有告警」不是「失败」：生成器退出码 1 = 算完了、写下去了、有几条要人裁决。
+        #    打成 [XX] 会让人以为重算没成，而实际上状态已经是新的了。
+        #    判据是**写下去了没有**，不是退出码。
+        n_alarm = sum(1 for ln in (g.get("out") or "").splitlines() if ln.startswith("ALARM:"))
+        if "written:" in (g.get("out") or ""):
+            print("[OK] 已重算 %s%s" % (brain, ("　⚠ 有 %d 条要你裁决（上面 ALARM 开头的行）" % n_alarm)
+                                       if n_alarm else ""))
+            sys.exit(1 if n_alarm else 0)
         if g.get("exit"):
             print("[XX] 生成器退出码 %s%s" % (g["exit"], ("：" + g["err"]) if g.get("err") else ""))
             sys.exit(1)

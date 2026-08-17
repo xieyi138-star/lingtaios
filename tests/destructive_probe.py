@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""破坏性验证：进程内导入的探针，失败时必须照样报红，不许静默返空/放行"""
+"""破坏性验证：进程内导入的探针，失败时必须照样报红，不许静默返空/放行
+
+⛔ 2026-08-17 改判据：以前这里断言「HTTP 不是 200」。那是拿**接口成败**去代表
+   **项目健康**，两个问题混成一个。真实后果：一个项目探针真红了（该让人看见），
+   驾驶舱的重算按钮打出「✗ 重算失败」——状态其实已经算好写下去了，人只会以为
+   按钮坏了，从此不点。现在判据回到直接证据：**红有没有报出来、值有没有被悄悄填上**。
+   （坑库 T17）
+"""
 import io, json, os, shutil, socket, subprocess, tempfile, time, urllib.request, urllib.error
 BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # tests 的上一级就是 brain-console
 # release_pkg 是作者本机的发布目录，别人 clone 下来只有自己打出来的 dist——两个都认，
@@ -55,16 +62,23 @@ for label, src, attr, want_ok, want_val in CASES:
     vals, alarms = doc.get("values", {}), doc.get("alarms", [])
     got_val = vals.get("p")
     if want_ok:
-        ok = st == 200 and got_val == want_val and not alarms
-        why = "value=%s alarms=%d" % (got_val, len(alarms))
+        ok = st == 200 and got_val == want_val and not alarms and d.get("alarms") == 0
+        why = "value=%s alarms=%d api_alarms=%s" % (got_val, len(alarms), d.get("alarms"))
     else:
-        # 必须报红：不许静默通过，也不许把值悄悄填成 0/None 当合格
-        ok = st != 200 and len(alarms) >= 1 and got_val is None
-        why = "http=%s alarms=%d value=%r | %s" % (
-            st, len(alarms), got_val, (alarms[0][:78].replace("\n", " ") if alarms else "NO ALARM!"))
+        # 必须报红：不许静默通过，也不许把值悄悄填成 0/None 当合格。
+        # 三处都要对：状态文件里有告警、值是空的、**接口自己也把告警数报上来**
+        # （只查文件的话，接口悄悄把红吞掉、界面显示一切正常，这里照样全绿）
+        ok = (len(alarms) >= 1 and got_val is None
+              and d.get("wrote") is True and (d.get("alarms") or 0) >= 1)
+        why = "http=%s alarms=%d api=%s/%s value=%r | %s" % (
+            st, len(alarms), d.get("wrote"), d.get("alarms"), got_val,
+            (alarms[0][:60].replace("\n", " ") if alarms else "NO ALARM!"))
     passed += ok
     print("[%s] %-18s %s" % ("PASS" if ok else "FAIL", label, why))
     shutil.rmtree(proj, ignore_errors=True)
 
 print("\n%d/%d destructive cases passed" % (passed, len(CASES)))
 sh('taskkill /F /IM lingtaios.exe /T')
+# 退出码要给：靠 runner 认末行文案，改一个字就静默变绿
+import sys as _sys
+_sys.exit(0 if passed == len(CASES) else 1)

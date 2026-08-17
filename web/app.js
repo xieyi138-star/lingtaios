@@ -198,6 +198,17 @@ function renderProjectDetail(d) {
       regenBtn.textContent = "✗ " + (r.error || "重算失败");
       return;
     }
+    // 这台电脑上算不出来（项目的探针要的东西这里没有）。原来的进度**原样还在**——
+    // 说清这一点，否则人会以为数据出事了，去翻项目找原因。
+    if (r.tool_broken) {
+      regenBtn.disabled = false;
+      regenBtn.textContent = "🔄 重算状态";
+      const box = document.getElementById("pd-rm-box");
+      if (box) box.innerHTML = '<div class="bad-box">这台电脑上算不出这个项目的进度' +
+        "（它要读的东西这里没有），<b>原来的进度一个字都没动</b>。<br>" +
+        "在平时开发这个项目的那台电脑上打开灵台，它会自己算好。</div>";
+      return;
+    }
     // 重进详情页：不刷新的话「最近一次生成」还是旧的，用户会以为没生效
     reloadData(() => goProjectDetail(d.path));
   };

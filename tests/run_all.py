@@ -44,8 +44,10 @@ SUITE = [
     "exe_mgmt_check.py",
     "exe_no_python_dep.py",      # 打包态发给用户的指令里不许出现他可能没有的 python 命令
     "seed_upgrade.py",           # 出厂文件：该升的升，用户改过的一个字都不许动
+    "install_fill.py",           # 装六器官时出厂模板每一处都要真填上（replace 漂了不报错）
     "pit_loss_alarm.py",         # 经验库悄悄变少了必须出声（手改改坏了表格是常态）
     "auto_regen_stale.py",       # 状态旧了扫描时自己重算：新窗口接手不许脱节
+    "regen_tool_broken.py",      # 量具跑不了时拒写（曾把一份全绿状态盖成全红，不可逆）
     "atomic_write_test.py",      # 写失败时原文件必须原样还在（open "w" 会先截断）
     "no_pollute_test.py",
     "workspace_e2e.py",

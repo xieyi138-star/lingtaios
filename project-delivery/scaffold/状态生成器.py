@@ -23,6 +23,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -35,6 +36,18 @@ OUT_JSON = os.path.join(HERE, "02_状态.json")
 
 class ProbeError(Exception):
     pass
+
+
+class ToolBroken(ProbeError):
+    """**量具自己坏了**，不是产物变了。
+
+    ⛔ 这两种红必须分开，因为处理方式相反：
+       产物变了 → 该写下去，让人看见变化；
+       量具坏了 → **绝不能写下去**，那会用一堆「取数失败」覆盖掉上一次的真数，
+                  而覆盖之后旧数就再也拿不回来了（除非有人恰好备份过）。
+       实测：exe 里打包的 Python 没有 sqlite3，`lingtaios.exe --regen` 把
+       IPGuard 一份 10 个探针全绿的状态覆盖成了 11 条「取数失败」。
+    """
 
 
 # ── 探针实现 ──────────────────────────────────────────────
@@ -69,6 +82,61 @@ def p_regex_count(root, spec):
     return n, u"在 %d 个文件里数 `%s` → %d" % (len(fs), spec["pattern"], n)
 
 
+_HOST_PY = "未找过"
+
+
+def _host_python():
+    """找一台机器上现成的 Python 3（打包态自己那份不带项目要的模块）。没有返回 None。
+
+    「零依赖」的意思是**不许要求**用户装 Python，不是不许用他已经装了的那个。
+    装了就借来跑一趟（顺带把子进程隔离也拿回来了），没装才认输。
+    """
+    global _HOST_PY
+    if _HOST_PY != "未找过":
+        return _HOST_PY
+    cands = []
+    for c in ("python", "python3"):
+        p = shutil.which(c)
+        if p:
+            cands.append([p])
+    p = shutil.which("py")
+    if p:
+        cands.append([p, "-3"])
+    _HOST_PY = None
+    for cmd in cands:
+        try:
+            # Windows 上 PATH 里那个 python.exe 可能是应用商店的占位程序：带参数跑
+            # 会直接非零退出（只有不带参数才会弹商店），所以这一句就能把它筛掉。
+            r = subprocess.run(cmd + ["-c", "import sys;print(sys.version_info[0])"],
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode == 0 and (r.stdout or "").strip() == "3":
+                _HOST_PY = cmd
+                break
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            continue
+    return _HOST_PY
+
+
+def _import_len_via(cmd, d, name, attr):
+    """用给定解释器起子进程导入模块取长度。失败抛 ProbeError。"""
+    code = (
+        "import sys,json\n"
+        "sys.path[:0]=[%r]\n"
+        "import %s as M\n"
+        "print(json.dumps({'n': len(getattr(M, %r))}))\n"
+        % (d, name, attr)
+    )
+    r = subprocess.run(cmd + ["-X", "utf8", "-c", code],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", cwd=d, timeout=120)
+    if r.returncode != 0:
+        raise ProbeError(u"导入失败：%s" % (r.stderr or "")[-200:])
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1])["n"]
+    except Exception:
+        raise ProbeError(u"输出解析失败：%s" % r.stdout[:200])
+
+
 def p_py_attr_len(root, spec):
     """导入一个模块，取某个属性的长度。用于「道层原理数」这类真源在代码里的量。"""
     path = os.path.join(root, spec["module"])
@@ -80,9 +148,9 @@ def p_py_attr_len(root, spec):
     if getattr(sys, "frozen", False):
         # ⛔ 打包环境（灵台 exe）里 sys.executable 是宿主 exe，不是 python.exe。
         # 拿它当解释器起隔离子进程 → 「unrecognized arguments: -X utf8 -c ...」，
-        # 探针会假报红：数其实好好的，红的是量具自己。而「零依赖」也不许改成去找系统 Python。
-        # → 退回进程内导入：隔离性没了（在自己的解释器里 exec 用户模块），但取得到真数；
-        #   导入真失败照样抛 ProbeError 报红，不静默返空。
+        # 探针会假报红：数其实好好的，红的是量具自己。
+        # → 先退回进程内导入：隔离性没了（在自己的解释器里 exec 用户模块），但取得到真数。
+        #   进程内导入缺模块时，再借机器上现成的 Python 跑一趟（见 _host_python）。
         import importlib.util
         sys.path.insert(0, d)
         try:
@@ -90,6 +158,26 @@ def p_py_attr_len(root, spec):
             mod = importlib.util.module_from_spec(spec_obj)
             spec_obj.loader.exec_module(mod)
             n = len(getattr(mod, spec["attr"]))
+        except ImportError as e:
+            # ⛔ 缺模块 = **量具自己跑不了**，不是产物变了。
+            #    exe 里打包的 Python 只带了生成器自己用到的标准库；项目探针
+            #    import 什么（sqlite3 / numpy / pandas…）打包时根本不知道。
+            #    实测：IPGuard 的 probe 要 sqlite3，exe 里没有，11 个探针全红。
+            #    先借机器上现成的 Python 救一把；救不了才认输——而这种红
+            #    **绝不能当成新状态写下去**，见 main() 里的拦截。
+            host = _host_python()
+            if host:
+                try:
+                    n = _import_len_via(host, d, name, spec["attr"])
+                except ProbeError as e2:
+                    # 借来的 Python 也跑不动：可能是它也缺这个包，也可能是项目模块真坏了。
+                    # 分不清就往「量具坏了」判——判错的代价不对等：
+                    # 判成量具坏 = 状态不更新（可补救）；判成产物变了 = 好数据被覆盖（不可逆）。
+                    raise ToolBroken(u"exe 内缺模块，借本机 Python 重试仍失败：%s" % e2)
+                return n, u"`%s`.%s → len=%d（借本机 Python 子进程导入·exe 内缺模块）" % (
+                    spec["module"], spec["attr"], n)
+            raise ToolBroken(u"进程内导入失败（打包环境缺模块），本机也没找到 Python：%s"
+                             % repr(e)[:160])
         except Exception as e:
             raise ProbeError(u"进程内导入失败：%s" % repr(e)[:200])
         finally:
@@ -99,22 +187,7 @@ def p_py_attr_len(root, spec):
         return n, u"`%s`.%s → len=%d（进程内导入·打包环境无子进程隔离）" % (
             spec["module"], spec["attr"], n)
 
-    code = (
-        "import sys,json\n"
-        "sys.path[:0]=[%r]\n"
-        "import %s as M\n"
-        "print(json.dumps({'n': len(getattr(M, %r))}))\n"
-        % (d, name, spec["attr"])
-    )
-    r = subprocess.run([sys.executable, "-X", "utf8", "-c", code],
-                       capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", cwd=d)
-    if r.returncode != 0:
-        raise ProbeError(u"导入失败：%s" % (r.stderr or "")[-200:])
-    try:
-        n = json.loads(r.stdout.strip().splitlines()[-1])["n"]
-    except Exception:
-        raise ProbeError(u"输出解析失败：%s" % r.stdout[:200])
+    n = _import_len_via([sys.executable], d, name, spec["attr"])
     return n, u"`%s`.%s → len=%d（子进程导入，隔离环境）" % (spec["module"], spec["attr"], n)
 
 
@@ -180,6 +253,7 @@ def run(conf, root, high_water=None):
     high_water = high_water or {}
     rows, alarms = [], []
     vals = {}
+    broken = []          # 量具自己跑不了的（缺模块），跟「产物变了」分开收
     for spec in conf.get("probes", []):
         name = spec["name"]
         fn = PROBES.get(spec.get("type"))
@@ -213,10 +287,14 @@ def run(conf, root, high_water=None):
             if spec.get("type") == "declared":
                 flag = u"🟡"
             rows.append((name, v, how, flag))
+        except ToolBroken as e:
+            broken.append(u"%s：%s" % (name, e))
+            alarms.append(u"**%s 取数失败**：%s" % (name, e))
+            rows.append((name, u"取不到", u"❌ %s" % e, u"🔴"))
         except ProbeError as e:
             alarms.append(u"**%s 取数失败**：%s" % (name, e))
             rows.append((name, u"取不到", u"❌ %s" % e, u"🔴"))
-    return rows, alarms, vals
+    return rows, alarms, vals, broken
 
 
 def health(conf, vals):
@@ -294,7 +372,7 @@ def _selftest():
             {"name": "棘轮掉", "type": "file_count", "glob": "docs/law-*.md", "ratchet": True},
         ], "health": [{"name": "闸/法", "numerator": "闸", "denominator": "法", "alarm": "上升即警报"}]}
         # 历史最高：「棘轮涨」记 1（实读 2，涨了）；「棘轮掉」记 5（实读 2，掉了）
-        rows, alarms, vals = run(conf, d, {"棘轮涨": 1, "棘轮掉": 5})
+        rows, alarms, vals, _broken = run(conf, d, {"棘轮涨": 1, "棘轮掉": 5})
         ok = True
 
         def ck(c, m):
@@ -344,7 +422,19 @@ def main():
                 prev_hw = json.load(f).get("high_water") or {}
         except (ValueError, OSError):
             prev_hw = {}
-    rows, alarms, vals = run(conf, root, prev_hw)
+    rows, alarms, vals, broken = run(conf, root, prev_hw)
+    # ⛔ 量具自己跑不了时，**绝不许把这份「全是取数失败」写下去**。
+    #    写下去等于用一堆红把上一次的真数永久覆盖掉——旧数再也拿不回来。
+    #    实测：exe 里打包的 Python 没有 sqlite3，`lingtaios.exe --regen` 把
+    #    IPGuard 一份 10 个探针全绿的状态盖成了 11 条「取数失败」。
+    #    「取数失败必须出声」是对的，但出声 ≠ 把失败当成新状态存档。
+    if broken:
+        print(u"⛔ 没有重算：量具自己跑不了，不是产物变了——保留上一次的状态不动。")
+        for x in broken[:6]:
+            print(u"   " + x)
+        print(u"   多半是这个环境缺项目探针要的模块（打包的 exe 只带生成器自己用到的标准库）。")
+        print(u"   用装了这些模块的 Python 跑：python -X utf8 状态生成器.py --dir <brain目录>")
+        sys.exit(3)          # 3 = 量具坏了，跟「有告警」的 1 分开
     hrows = health(conf, vals)
     md = render(conf, rows, alarms, hrows)
     if "--check" not in sys.argv:
