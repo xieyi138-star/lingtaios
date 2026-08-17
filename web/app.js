@@ -360,8 +360,16 @@ function renderHome() {
   // ⛔ 首页只放**用户要处理的事**。
   //    「断头 / 同名双份」是装配图指针的一致性问题，属于体系自检，挪去 设置 → 进化审计；
   //    留在这儿的是他真的要动手的两件：项目够不着了、交接太久没更新。
-  if (staleN || gone.length) {
+  /* 经验库悄悄变少了：多半是有人手动改了坑库.md 把表格改坏（删错一个竖线，
+     整行就不算数了）。灵台拦不住他改，但**绝不能默默接受这种损失**——
+     不出声的话，AI 从此读到的是一份缺角的经验库，而他只会觉得系统不稳。 */
+  const loss = DATA.pit_loss;
+  if (staleN || gone.length || loss) {
     html += '<div class="section"><h2>🔴 先看这里</h2><ul>' +
+      (loss ? "<li>🟠 经验库从 <b>" + loss.was + "</b> 条变成了 <b>" + loss.now +
+        "</b> 条。<br><span class=\"muted-note\">如果不是你有意删的，多半是 " +
+        "<code>坑库.md</code> 被改动时表格格式弄坏了——那几行 AI 就读不到了。" +
+        '</span> <button class="chip-btn" id="h-loss-ack">是我删的，不用再提</button></li>' : "") +
       gone.map(p => "<li>📴 够不着：<code>" + esc(p) +
         "</code>——外接硬盘没插？网络盘断了？目录挪走了？（它还记在你的项目清单里）</li>").join("") +
       // 提到哪儿就得能点过去。⛔ 这条以前指向「设置→进化审计」，那页已经没了——
@@ -403,6 +411,13 @@ function renderHome() {
   if (hAdd) hAdd.onclick = () => { go("projects"); addProjectHere(); };
   const tp = document.getElementById("h-tile-pitfall");
   if (tp) tp.onclick = () => go("pitfall");
+  const la = document.getElementById("h-loss-ack");
+  if (la) la.onclick = async () => {
+    la.disabled = true;
+    la.textContent = "处理中…";
+    await post("api/pit_loss_ack", {});
+    reloadData(renderHome);
+  };
   main.querySelectorAll(".h-goto-projects").forEach(a => {
     a.onclick = e => { e.preventDefault(); go("projects"); };
   });
@@ -873,8 +888,16 @@ function renderSysTab() {
            摆在那儿只会让他以为自己少做了一步、是不是还得装 Python。开发者看 README。
        重写的判据：说他**会失去什么**，不说文件叫什么；能给按钮就不给路径；
        想看细节的自己点开。 */
+    /* ⛔ 原文是「用记事本就能打开、自己改」——在**鼓励**用户手改。
+         这条风险是不对称的：改好了收益很小，改坏了 AI 读到的规矩就是坏的，
+         而且他不会知道，只会觉得「这系统不稳定」。坑库是按表格结构解析的，
+         删错一个竖线，条数就静默变少。
+       但「记忆归你、不锁着」是第一承诺，不能因此变成「别碰」。
+       这两件事本来就该分开：**可带走 ≠ 请随便改**。 */
     box.innerHTML =
-      '<p>你的东西全在这台电脑上，灵台<b>不往外传</b>。用记事本就能打开、自己改。</p>' +
+      '<p>你的东西全在这台电脑上，灵台<b>不往外传，也不锁</b>——整个文件夹拷走就能带走。</p>' +
+      '<p class="muted-note">⚠️ 里面是给 AI 读的文件，格式改坏了它就读不懂。' +
+      "想改内容，让 AI 帮你改，别手动动格式。</p>" +
       (skills ? '<div class="filter-row"><button class="chip-btn primary" id="sys-open-method">📂 打开我的文件夹</button></div>' : "") +
       "<h3 style=\"margin-top:20px\">换新电脑</h3>" +
       "<p>把 <code>lingtaios.exe</code> <b>所在的整个文件夹</b>拷过去，双击接着用。</p>" +

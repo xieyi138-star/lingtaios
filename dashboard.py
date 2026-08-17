@@ -430,6 +430,14 @@ def api_audit_delete(data):
             return 400, {"ok": False, "error": "没有匹配的行被删（编号不对？）"}
         with io.open(PITFALL, "w", encoding="utf-8") as f:
             f.write("\n".join(keep))
+        # 走界面退休的是**有意**减少：把基线跟着降下去，别让 _pit_loss 误报。
+        # 手改文件导致的减少没有这一步，所以照样会被抓出来。
+        try:
+            with io.open(PITFALL, encoding="utf-8") as f:
+                _now = sum(1 for ln in f if re.match(r"^\| [PWSRT]\d+ \|", ln))
+            _pit_baseline_set(_now)
+        except OSError:
+            pass
         try:
             build(load_roots(), ACTIVE_SITE)
         except Exception:
@@ -1390,6 +1398,53 @@ def _md5(p):
         return None
 
 
+def _pit_baseline_path(out_dir=None):
+    # 存在生成物目录里：是本机状态，不是真源；演练态自带自己的 site，天然隔离
+    return os.path.join(out_dir or ACTIVE_SITE or SITE, "pit_baseline.json")
+
+
+def _pit_loss(now, out_dir=None):
+    """经验库条数**悄悄**变少了就出声。
+
+    ⛔ 界面上写着「文件都在你这儿，随时能打开」，那就一定会有人去手动改。
+       而坑库是按表格结构解析的——删错一个竖线、少一列，条数就静默变少，
+       AI 从此读到的是一份缺角的经验库，而他不会知道，只会觉得「这系统不稳」。
+       系统拦不住他改，但**绝不能默默接受这种损失**。
+       有意删的（界面上点「这条不用了」）会顺手把基线降下去，不会误报。
+    """
+    p = _pit_baseline_path(out_dir)
+    was = None
+    try:
+        with io.open(p, encoding="utf-8") as f:
+            was = json.load(f).get("count")
+    except (OSError, ValueError):
+        was = None
+    if not isinstance(was, int) or now >= was:
+        try:
+            d = os.path.dirname(p)
+            if d and not os.path.isdir(d):
+                os.makedirs(d)
+            with io.open(p, "w", encoding="utf-8") as f:
+                json.dump({"count": now, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+        except OSError:
+            pass
+        return None
+    return {"was": was, "now": now}
+
+
+def _pit_baseline_set(now):
+    """把基线对齐到当前条数：用户确认过这次减少是他自己的意思。"""
+    p = _pit_baseline_path()
+    try:
+        d = os.path.dirname(p)
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
+        with io.open(p, "w", encoding="utf-8") as f:
+            json.dump({"count": now, "at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
+    except OSError:
+        pass
+
+
 def sync_probe(projects):
     """通用件落后就**自己同步掉**，不做成一道问用户的选择题。
 
@@ -1472,6 +1527,26 @@ def api_sync_project(data):
 # 现在 _shipped_hashes() 记着每一版发出去时的原样，一比就知道：
 # 等于原样 = 没动过 = 自动升级；不等于 = 他改过 = 留着不动，也不打扰他。
 # 于是没有「待定」这一档了，这个接口也就没有存在理由。
+
+
+def api_pit_loss_ack(data):
+    """用户确认「这次变少是我自己弄的」——把基线对齐，别再报。
+
+    ⛔ 只提供「确认」，不提供「恢复」：灵台不留坑库的副本（记忆归你，不是归它）。
+       真要找回，用户自己的 git / 文件历史 / .bak 才是退路。
+       嘴上说能恢复而实际恢复不了，比不提供更坏。
+    """
+    try:
+        with io.open(PITFALL, encoding="utf-8") as f:
+            now = sum(1 for ln in f if re.match(r"^\| [PWSRT]\d+ \|", ln))
+    except OSError as e:
+        return 500, {"ok": False, "error": str(e)}
+    _pit_baseline_set(now)
+    try:
+        build(load_roots(), ACTIVE_SITE)
+    except Exception:
+        pass
+    return 200, {"ok": True, "count": now}
 
 
 def api_run_generator(data):
@@ -2010,6 +2085,8 @@ def build(roots, out_dir):
         "methods": methods,
         "evolution": evolution,
         "sync": sync,
+        # 经验库悄悄变少了就出声——见 _pit_loss()
+        "pit_loss": _pit_loss(len(pit_rows), out_dir),
     }
     if out_dir:
         if not os.path.isdir(out_dir):
@@ -2065,6 +2142,7 @@ def serve(open_browser):
             routes = {
                 "/api/create_project": lambda: api_create_project(data),
                 "/api/run_generator": lambda: api_run_generator(data),
+                "/api/pit_loss_ack": lambda: api_pit_loss_ack(data),
                 "/api/project_detail": lambda: api_project_detail(data),
                 "/api/open_dir": lambda: api_open_dir(data),
                 "/api/install_organs": lambda: api_install_organs(data),
