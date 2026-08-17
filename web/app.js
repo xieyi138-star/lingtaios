@@ -323,7 +323,11 @@ function renderHome() {
     '🧠 经验库 <b>' + esc(ev.total_pitfalls || DATA.pitfall.rows.length) + '</b> 条' +
     (ev.new_this_week ? '（本周 +' + esc(ev.new_this_week) + "）" : "") +
     ' · <a href="#" id="h-goto-pitfall">查坑/记坑</a>' +
-    ' · <a href="#" id="h-goto-sys">设置与审计</a>' +
+    ' · <a href="#" id="h-goto-sys">设置</a>' +
+    // 零遥测意味着「有没有人在用」你永远不知道。唯一诚实的办法是给一个**用户自愿**的
+    // 出口——不采集、不追踪，他愿意才点。METRICS.md 里写的「用户自愿信号」就是这个，
+    // 之前只写在文档里没做出来。
+    ' · <a href="' + REPO_URL + '/discussions" target="_blank" rel="noopener">这东西帮到你了？说一声 →</a>' +
     "</span></div>";
   html += '<div class="section"><h2>进行中的项目（' + active.length + '）</h2><div class="cards">' +
     active.slice(0, 6).map(slimCard).join("") + "</div>" +
@@ -559,6 +563,39 @@ function addProjectHere() {
   });
 }
 
+/* ---------- 坑库回流：把一条通用坑送回主库 ----------
+   ⛔ 不发任何网络请求，不上传任何数据——只是拼一个 GitHub「新建 Issue」的链接，
+      内容预填好，发不发由用户在 GitHub 上自己按。零遥测这条承诺不能因为
+      「想收集贡献」就打折。 */
+const REPO_URL = "https://github.com/xieyi138-star/lingtaios";
+function sharePitfall(p, code) {
+  const title = "[坑] " + String(p.pit || "").slice(0, 60);
+  const body = [
+    "> 判据：换一个项目、换一套技术栈，这条还成立吗？成立才该进主库。",
+    "",
+    "**分区**：" + (p.section || ""),
+    "",
+    "## 一句话坑",
+    p.pit || "",
+    "",
+    "## 防法（照做即可）",
+    p.fix || "",
+    "",
+    "## 失效判据（防的事被结构性消除即删）",
+    p.invalid_when || "",
+    "",
+    "## 出处",
+    p.source || "（未填）",
+    "",
+    "---",
+    "由灵台从本地坑库导出" + (code ? "（本地编号 " + code + "）" : "") + "。",
+    "我确认这条**不含**任何涉密信息（IP / 密钥 / 客户数据）。",
+  ].join("\n");
+  const url = REPO_URL + "/issues/new?labels=" + encodeURIComponent("坑库贡献") +
+    "&title=" + encodeURIComponent(title) + "&body=" + encodeURIComponent(body);
+  window.open(url, "_blank", "noopener");
+}
+
 /* ---------- 坑库：搜索 + 分区 + 分页 ---------- */
 let PIT_ROWS = [];
 const PIT_PAGE = 20;
@@ -608,8 +645,18 @@ function renderPitfall() {
     const rj = await r.json();
     const out = document.getElementById("pf-result");
     if (rj.ok) {
-      out.innerHTML = '<div class="ok-box">✓ 已入库（编号 ' + esc(rj.code) + "）</div>";
-      fetch("data.json").then(r2 => r2.json()).then(dd => { DATA = dd; go("pitfall"); });
+      // 记完这一刻是问「要不要贡献」的最佳时机——他刚踩完，最清楚这坑通不通用。
+      // 「用的人越多方法越准」这句话，只有把坑收得回来才不是空话。
+      out.innerHTML = '<div class="ok-box">✓ 已入库（编号 ' + esc(rj.code) + "）</div>" +
+        '<div class="section" style="margin-top:10px"><b>🌱 这条是跨项目通用的吗？</b>' +
+        '<p class="muted-note">判断只有一句：<b>换个项目、换套技术栈，这条还成立吗？</b>' +
+        "成立就贡献回主库，下一版所有人的 AI 都按更准的方法做事。<br>" +
+        "只在你这个项目成立的，留在自己库里同样有用，不用贡献。</p>" +
+        '<div class="filter-row"><button class="chip-btn accent-btn" id="pf-share">🌱 贡献回主库</button>' +
+        '<span class="muted-note">只会替你把内容填进 GitHub 表单，发不发你自己按——不上传任何东西</span></div></div>';
+      const sh = document.getElementById("pf-share");
+      if (sh) sh.onclick = () => sharePitfall(payload, rj.code);
+      fetch("data.json").then(r2 => r2.json()).then(dd => { DATA = dd; });
     } else {
       out.innerHTML = '<div class="bad-box">✗ ' + esc(rj.error) + "</div>";
     }
@@ -639,11 +686,22 @@ function drawPitRows() {
     '<tr class="pit-meta" data-i="' + i + '" style="display:none"><td colspan="' +
     PIT_MAIN.length + '"><span class="muted-note">' +
     meta.filter(c => String(r[c] || "").trim()).map(c => esc(c) + "：" + esc(r[c])).join("　·　") +
-    "</span></td></tr>").join("");
+    '</span>　<button class="chip-btn pit-share" data-i="' + i +
+    '" title="换个项目、换套技术栈还成立的，才该进主库">🌱 贡献回主库</button></td></tr>').join("");
   document.querySelectorAll("#pit-table .pit-row").forEach(tr => {
     tr.onclick = () => {
       const m = document.querySelector('#pit-table .pit-meta[data-i="' + tr.dataset.i + '"]');
       if (m) m.style.display = m.style.display === "none" ? "" : "none";
+    };
+  });
+  document.querySelectorAll("#pit-table .pit-share").forEach(b => {
+    b.onclick = e => {
+      e.stopPropagation();          // 别把展开/收起也一起触发了
+      const r = shown[+b.dataset.i];
+      sharePitfall({
+        section: r.__section, pit: r["一句话坑"], fix: r["防法（照做即可）"],
+        source: r["出处"], invalid_when: r["失效判据"],
+      }, r["编号"]);
     };
   });
   document.getElementById("pit-count").textContent = "显示 " + shown.length + " / " + rows.length;
