@@ -65,14 +65,23 @@ python -m PyInstaller lingtaios.spec
 
 ## 换电脑
 
-1. 拷走整个目录（或 clone 本仓库）
-2. 跑 `python -X utf8 install.py`（自动探测各根）
-3. 跑 `python -X utf8 dashboard.py`
+**用 exe 的**：把 `lingtaios.exe` 所在的**整个文件夹**拷到新机器，双击接着用。
+里面有你的配置、方法论文件和记下的坑 —— 只拷 exe 等于重新开始。
+
+**用源码的**：clone → `python -X utf8 install.py` → `python -X utf8 dashboard.py`。
 
 业务数据（本机专属）留原机；方法体系全带走。
 
-## 开源
+## 许可
 
-核心 Apache-2.0（一次定死）。闭源层预留：技能市场（审核/签名/托管），见 `marketplace/`。
+源码可读、可审计、可自用、可改 —— [**FSL-1.1-ALv2**](LICENSE)（Functional Source License，Sentry 提出）。
 
-Apache-2.0
+| | |
+|---|---|
+| ✅ 你可以 | 自己用、公司内部用、改成你自己的、非商业教育与研究、基于它给客户提供服务 |
+| ❌ 你不可以 | 把它做成与灵台竞争的商业产品或服务对外售卖 |
+| ⏳ 两年后 | 每个版本发布满 2 年，**自动转为 Apache-2.0** |
+
+**为什么不用 Apache-2.0**：那样任何人都能改个名字闭源卖，而灵台最容易被整包搬走的
+恰恰是它的核心 —— 经验库和方法论。FSL 保住了"你能看、能改、能自己用"这条线，
+只堵住"拿去做竞品"这一个出口。这不是把开源收回去，是不做慈善。
