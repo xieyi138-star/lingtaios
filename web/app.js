@@ -329,11 +329,27 @@ function renderHome() {
     '<div class="tile ' + t[2] + '"><div class="tile-num">' + esc(t[1]) + '</div><div class="tile-label">' + esc(t[0]) + "</div></div>"
   ).join("") + "</div>";
 
+  /* ⛔ 这里原来是「📋 复制开窗三句话」——首页最显眼的主按钮，复制出来的却是：
+       「2. 读本项目 brain\01_法典.md」。**「本项目」是哪个？没说**，brain\... 是个
+       没有根的相对路径。粘给 AI，它只能反问「哪个项目」或者在当前目录瞎猜。
+       （顺带它叫「三句话」，实际四行。）
+       开工这件事**必须绑定到一个具体项目**：项目详情页的「继续做」指令给的是完整
+       绝对路径，那份才能用。所以首页这个位置改成「接着上次那个项目干」——
+       挑最近动过的一个，名字写在按钮上，用户点之前就看得见是哪个。
+       一个项目都没有时不渲染它：没有项目就没有「开工」这回事。 */
+  const recent = active.slice().sort((a, b) =>
+    String(b.state_at || b.handoff_mtime || "").localeCompare(
+      String(a.state_at || a.handoff_mtime || "")))[0];
   html += '<div class="section card start-card"><h2>今日开工</h2>' +
     // 「红绿灯全绿 / 收窗 / 分段落盘」都是自家说法，第一次来的人看不懂。
-    '<p class="muted-note">点「复制」→ 粘给任何 AI → 直接开工。不用记得收尾，AI 每做完一段就把进度写回文件。</p>' +
+    '<p class="muted-note">' + (recent
+      ? "点「复制」→ 粘给任何 AI → 直接开工。不用记得收尾，AI 每做完一段就把进度写回文件。"
+      : "还没有项目。先建一个，或者把电脑上已经在做的加进来。") + "</p>" +
     '<div class="filter-row">' +
-    '<button class="chip-btn primary" id="h-open-btn">📋 复制开窗三句话</button>' +
+    (recent
+      ? '<button class="chip-btn primary" id="h-open-btn" data-path="' + esc(recent.path) +
+        '">📋 继续做：' + esc(recent.name) + "</button>"
+      : "") +
     '<button class="chip-btn accent-btn" id="h-newproj">＋ 新项目</button>' +
     // 「新项目」是从零建一个；「添加已有」是把电脑上已经存在的项目收进来。
     // 两回事，用户想收录已有项目时不该只能去项目页找
@@ -419,18 +435,21 @@ function renderHome() {
       b.disabled = false; b.textContent = "✗ 扫描失败";
     }
   };
-  fetch("api/templates", { method: "POST" }).then(r => r.json()).then(t => {
-    document.getElementById("h-open-btn").onclick = async () => {
-      const ok = await copyText(t.open);
-      document.getElementById("h-note").textContent =
-        ok ? "✓ 已复制——打开任意 AI，粘贴，开工。" : "✗ 复制失败，手动选中下面文本";
-      if (!ok) {
-        const ta = document.createElement("textarea");
-        ta.value = t.open; ta.rows = 4; ta.readOnly = true;
-        document.getElementById("h-note").appendChild(ta);
-      }
+  const openBtn = document.getElementById("h-open-btn");
+  if (openBtn) {
+    openBtn.onclick = async () => {
+      const note = document.getElementById("h-note");
+      note.textContent = "取指令中…";
+      // 复制的是**这个项目**的「继续做」指令（含这台机器上的真实绝对路径），
+      // 跟点进项目详情页再复制拿到的是同一份。
+      const r = await post("api/project_detail", { path: openBtn.dataset.path });
+      const d = r.detail || r;
+      if (!d.resume) { note.textContent = "✗ 取不到指令，点进项目页再试"; return; }
+      note.textContent = (await copyText(d.resume))
+        ? "✓ 已复制——打开任意 AI，粘贴，开工。"
+        : "✗ 复制失败，点进项目页手动选";
     };
-  });
+  }
 }
 
 /* ---------- 项目页：全部可点；装系统的在前，未装的折叠区同样可点 ---------- */
@@ -1077,7 +1096,14 @@ function renderSysTab(which) {
       "<li><b>你记的坑</b>　<code>" + esc(skills ? skills + "\\project-delivery\\坑库.md" : "—") + "</code></li>" +
       "<li><b>每个项目自己的六器官</b>　在各项目目录下的 <code>brain\\</code> 里</li>" +
       "</ul>" +
-      (skills ? '<div class="filter-row"><button class="chip-btn" id="sys-open-method">📂 打开方法论目录</button></div>' : "") +
+      /* 「把方法交给一个还没绑项目的 AI」原来挂在首页主按钮上，叫「复制开窗三句话」，
+         但它混进了 `读本项目 brain\01_法典.md` 这种没有根的相对路径，开不了工。
+         开工归项目详情页的「继续做」指令（带绝对路径）；这份只剩「先读接入卡 +
+         打证据头」，属于「我的文件」这一页，不该占首页主位。 */
+      (skills ? '<div class="filter-row"><button class="chip-btn" id="sys-open-method">📂 打开方法论目录</button>' +
+        '<button class="chip-btn" id="sys-copy-open">📋 复制「让 AI 先学会这套方法」</button></div>' +
+        '<p class="muted-note" id="sys-copy-note">要接着做某个具体项目，别用这个——' +
+        "去项目页点「复制『继续做』指令」，那份带着这台机器上的真实路径。</p>" : "") +
       "<h3 style=\"margin-top:18px\">换机</h3>" +
       "<h4>用 exe 的</h4>" +
       '<ol class="steps">' +
@@ -1103,6 +1129,16 @@ function renderSysTab(which) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: skills + "\\project-delivery" }),
       });
+    }
+    const co = document.getElementById("sys-copy-open");
+    if (co) {
+      co.onclick = async () => {
+        const t = await post("api/templates", {});
+        const note = document.getElementById("sys-copy-note");
+        note.textContent = (t.open && await copyText(t.open))
+          ? "✓ 已复制——粘给任何 AI，它会先去读接入卡、学会这套做事方法。"
+          : "✗ 复制失败";
+      };
     }
   }
 }
