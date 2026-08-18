@@ -17,11 +17,13 @@
     python -X utf8 tests\\run_all.py --no-restart    # 跑完不起服务（调试用）
 """
 import argparse
+import io
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 BC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -139,6 +141,24 @@ def run(script, label=None):
     red = (r.returncode != 0) or ("SOME FAILED" in out) or ("[FAIL]" in out) \
         or ("内容不同 0 件" not in out and "soul_manifest" in script)
     print("  %-24s %s  (%.0fs)  %s" % (script, "红" if red else "绿", time.time() - t0, last[:70]))
+    if red:
+        # ⛔ 红的时候必须把**当次**完整输出留下来。
+        #    这里以前只保留末行，于是红了要重新单独跑才能看原因——而这类红
+        #    （端口竞争、时序）**重跑往往就不复现了**，现场当场消失。
+        #    2026-08-17 实测踩到：stress_a 在全量里红一次，单独重跑 8/8 全过，
+        #    第二次全量也不复现，根因至今没查出来。查不清的红等于没红过：
+        #    它既不能修，也会训练人把红当噪声。
+        try:
+            fp = os.path.join(tempfile.gettempdir(),
+                              "lingtaios_fail_%s_%s.log" % (script.replace(".", "_"),
+                                                            time.strftime("%Y%m%d_%H%M%S")))
+            with io.open(fp, "w", encoding="utf-8") as f:
+                f.write("script: %s\nreturncode: %s\nwhen: %s\n%s\n" %
+                        (script, r.returncode, time.strftime("%Y-%m-%d %H:%M:%S"), "=" * 60))
+                f.write(out)
+            print("       ↳ 完整输出已留存（重跑会丢现场）：%s" % fp)
+        except OSError:
+            pass
     return (script, not red, last)
 
 
