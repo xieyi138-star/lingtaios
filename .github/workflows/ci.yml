@@ -37,10 +37,15 @@ jobs:
           python-version: '3.12'
 
       # 语法先过。语法错在别的平台上表现成千奇百怪的运行时错误，先排掉。
+      # ⛔ 每一处 python 调用都带 -X utf8。
+      #    CI 的 windows runner 上 stdout 默认是 **cp1252**（比本机 GBK 还窄），
+      #    脚本里只要 print 一个中文就 UnicodeEncodeError -> exit 1。
+      #    第一次跑就撞上：判据其实已经比对通过了，是打印结果那一行炸的——
+      #    「判据失败」和「打印失败」在退出码里长得一模一样（坑库 T17 的形状）。
       - name: 语法编译
         shell: bash
         run: |
-          python -m compileall -q . -x '(^|/)(build|dist|__pycache__)/' || exit 1
+          python -X utf8 -m compileall -q . -x '(^|/)(build|dist|__pycache__)/' || exit 1
 
       # gate.sh 的 shebang 和行尾符：CRLF 会让它在 Linux 上报 bad interpreter，
       # 而那条错误信息里没有「行尾符」四个字。.gitattributes 守着，这里验它真守住了。
@@ -75,14 +80,15 @@ jobs:
           a="$(mktemp -d)"; b="$(mktemp -d)"
           python -X utf8 project-delivery/hooks/mount.py --claude-dir "$a"
           python -X utf8 dashboard.py --install-hooks --claude-dir "$b"
-          python - "$a" "$b" <<'PY'
+          python -X utf8 - "$a" "$b" <<'PY'
           import json, sys
           def norm(p):
               with open(p + "/settings.json", encoding="utf-8") as f:
                   return json.dumps(json.load(f), sort_keys=True)
+          # ASCII only: CI logs get read on runners whose stdout is cp1252.
           if norm(sys.argv[1]) != norm(sys.argv[2]):
-              print("mount.py 和 dashboard --install-hooks 产出不一致"); sys.exit(1)
-          print("两个入口产出一致")
+              print("MISMATCH: mount.py vs dashboard --install-hooks"); sys.exit(1)
+          print("both entry points agree")
           PY
 
       # 闭环工具在这台机器上跑不跑得动（Windows 才有 ps1）
