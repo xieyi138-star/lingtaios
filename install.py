@@ -50,16 +50,8 @@ METHOD_SOURCES = [
     "project-delivery/hooks/gate.ps1",
     "project-delivery/hooks/gate.sh",
     "project-delivery/hooks/pit_gate_map.json",
+    "project-delivery/hooks/mount.py",
     "project-delivery/hooks/README.md",
-]
-
-# L0 挂到 Claude Code 的哪些事件上。matcher 只在 PreToolUse 有意义。
-# ⛔ 不写 "*"：那等于每次工具调用都启一个 PowerShell（约 200-300ms），
-#    而读文件/搜索这类高频只读操作根本不需要进闸。
-L0_EVENTS = [
-    ("SessionStart", None),
-    ("Stop", None),
-    ("PreToolUse", "Write|Edit|NotebookEdit|Bash|PowerShell"),
 ]
 
 LAUNCHER_LINES = [
@@ -81,116 +73,42 @@ def detect_root(candidate):
     return None
 
 
-def _l0_handler():
-    """本平台跑 L0 闸门的命令。Windows 走 gate.ps1，其余走 gate.sh。"""
-    if os.name == "nt":
-        return {
-            "type": "command",
-            "command": "powershell.exe",
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                     os.path.join(REPO, "project-delivery", "hooks", "gate.ps1")],
-            "timeout": 20,
-        }
-    return {
-        "type": "command",
-        "command": "bash",
-        "args": [os.path.join(REPO, "project-delivery", "hooks", "gate.sh")],
-        "timeout": 20,
-    }
+def _load_mount():
+    """加载 L0 挂载模块（唯一实现在 hooks/mount.py）。
 
-
-def _gate_path_of(handler):
-    a = handler.get("args") or []
-    return a[-1] if a else ""
+    ⛔ 不在这里再写一份。它有三个调用方——install.py、exe 的 --install-hooks、
+       直接 python mount.py——抄第二份必分叉（坑库 P10），而这一份分叉的后果是
+       把别人存着权限配置的 settings.json 写坏。
+    动态 import 而不是 `from ... import`：两种布局下它的相对位置不同，
+    而且缺了它 install 的其余部分仍应该能跑完。
+    """
+    p = os.path.join(REPO, "project-delivery", "hooks", "mount.py")
+    if not os.path.isfile(p):
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("l0_mount", p)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+    except Exception as e:                      # noqa: BLE001 - 装机脚本不许被它带崩
+        print("[!!] L0 挂载模块加载失败：%s: %s" % (e.__class__.__name__, e))
+        return None
 
 
 def l0_status(claude_dir):
-    """(已挂载?, 说明)。只读，不写。"""
-    p = os.path.join(claude_dir, "settings.json")
-    if not os.path.isfile(p):
-        return (False, "settings.json 不存在")
-    try:
-        with open(p, encoding="utf-8-sig") as f:
-            conf = json.load(f)
-    except (OSError, ValueError) as e:
-        # ⛔ 这一档必须和「没装」分开：settings.json 语法坏了的时候，
-        #    Claude Code 会连 permissions 一起失效，而那看起来像别的毛病。
-        return (False, "settings.json 读不出来（%s）——先修它，别急着装 L0" % e.__class__.__name__)
-    want = os.path.normcase(_gate_path_of(_l0_handler()))
-    for ev, _m in L0_EVENTS:
-        entries = conf.get("hooks", {}).get(ev) or []
-        found = False
-        for grp in entries:
-            for h in (grp.get("hooks") or []):
-                if os.path.normcase(_gate_path_of(h)) == want:
-                    found = True
-        if not found:
-            return (False, "缺 %s 这一挂" % ev)
-    return (True, "三个事件都挂着")
+    m = _load_mount()
+    if m is None:
+        return (False, "找不到 hooks/mount.py")
+    return m.status(claude_dir)
 
 
 def install_l0(claude_dir):
-    """把 L0 挂进 settings.json。**只增不覆盖**——这是用户自己的文件。
-
-    ⛔ 已有的 hooks 一条都不动，只往对应事件的数组里追加自己那条；
-       已经挂过就什么都不做（幂等）。
-    ⛔ 写之前先备份，且走「先写临时文件再替换」（坑库 T15：
-       open(...,'w') 是先截断后写，中途失败原文件就没了）。
-    """
-    p = os.path.join(claude_dir, "settings.json")
-    conf = {}
-    if os.path.isfile(p):
-        try:
-            with open(p, encoding="utf-8-sig") as f:
-                conf = json.load(f)
-        except (OSError, ValueError) as e:
-            print("[!!] settings.json 存在但读不出来（%s）——L0 没装。" % e.__class__.__name__)
-            print("     不动它是故意的：这个文件里还有你的权限配置，"
-                  "覆盖掉比不装 L0 贵得多。修好语法再跑一次。")
-            return False
-        bak = p + ".before-l0"
-        if not os.path.isfile(bak):
-            with open(bak, "w", encoding="utf-8") as f:
-                json.dump(conf, f, ensure_ascii=False, indent=2)
-            print("[OK] 原 settings.json 已备份：%s" % bak)
-
-    handler = _l0_handler()
-    if not os.path.isfile(_gate_path_of(handler)):
-        print("[XX] 找不到闸门脚本：%s" % _gate_path_of(handler))
+    m = _load_mount()
+    if m is None:
+        print("[!!] 找不到 hooks/mount.py，L0 没装")
         return False
-
-    hooks = conf.setdefault("hooks", {})
-    want = os.path.normcase(_gate_path_of(handler))
-    added = []
-    for ev, matcher in L0_EVENTS:
-        arr = hooks.setdefault(ev, [])
-        already = any(os.path.normcase(_gate_path_of(h)) == want
-                      for grp in arr for h in (grp.get("hooks") or []))
-        if already:
-            continue
-        grp = {"hooks": [dict(handler)]}
-        if matcher:
-            grp["matcher"] = matcher
-        arr.append(grp)
-        added.append(ev)
-
-    if not added:
-        print("[OK] L0 已经挂着，未改动 settings.json")
-        return True
-
-    tmp = p + ".tmp"
-    if not os.path.isdir(claude_dir):
-        os.makedirs(claude_dir)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(conf, f, ensure_ascii=False, indent=2)
-    # 先验新文件读得回来，再替换旧的（准备→验证→切换）
-    with open(tmp, encoding="utf-8") as f:
-        json.load(f)
-    os.replace(tmp, p)
-    print("[OK] L0 已挂上：%s（新增 %s）" % (p, ", ".join(added)))
-    print("     关掉它：改 project-delivery/hooks/config.json 的 master_switch 为 false")
-    print("     ⚠️ 需要重开一个 Claude Code 会话才生效")
-    return True
+    return m.mount(claude_dir)
 
 
 def check(claude_dir, roots, out):

@@ -41,7 +41,13 @@ def health(port=8765):
         return json.loads(r.read().decode("utf-8")).get("health", {})
 
 def spawn(cmd, cwd):
-    return subprocess.Popen(cmd, cwd=cwd, stdout=DN, stderr=DN)
+    # ⛔ 别再把并发实例的输出丢进 DEVNULL。
+    #    这条用例间歇性红（exits 里偶尔混一个 1），而红的时候屏幕上只有一串退出码，
+    #    没有任何一个实例说过什么——于是每次都只能靠猜，猜完重跑又不复现。
+    #    2026-08-18 为此空转了几轮：手动起 4 个实例复现不出来，因为**手动那次的
+    #    输出是留着的，回归这次的没留**。留住现场的成本是几 KB，猜的成本是一整轮。
+    #    同坑库 T18：判红那一刻就要有现场，不能指望「等会儿再重跑一遍看看」。
+    return subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 def run(cmd, cwd=None, timeout=120):
     r = subprocess.run(cmd, cwd=cwd, stdout=DN, stderr=DN, timeout=timeout)
@@ -93,14 +99,26 @@ if up:
 
     # 4. 4-way concurrent race
     ps = [spawn([EXE, "--no-browser"], os.path.dirname(EXE)) for _ in range(4)]
+    outs = []
     for p in ps:
-        try: p.wait(timeout=150)
-        except subprocess.TimeoutExpired: p.kill()
+        try:
+            o, _ = p.communicate(timeout=150)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            o = b""
+        outs.append((o or b"").decode("utf-8", errors="replace").strip())
     time.sleep(1)
     same = owner_pid(8765) == base_owner
     codes = [p.returncode for p in ps]
-    rec("4 concurrent x4: single owner", same and all(c == 0 for c in codes),
+    ok4 = same and all(c == 0 for c in codes)
+    rec("4 concurrent x4: single owner", ok4,
         "exits=%s owner unchanged=%s" % (codes, same))
+    if not ok4:
+        # 现场只有这一次，重跑就没了——判红当场打出来（坑库 T18）
+        print("      ↳ 并发实例各自说了什么（这段是根因唯一的线索）：")
+        for i, (c, o) in enumerate(zip(codes, outs)):
+            tail = [ln for ln in o.splitlines() if ln.strip()][-3:]
+            print("        [%d] exit=%s  %s" % (i, c, " ⏎ ".join(tail) if tail else "(无输出)"))
     try:
         # 同样不写死数字：跟风暴前那次读到的比，要求「一个都没掉」
         h = health()

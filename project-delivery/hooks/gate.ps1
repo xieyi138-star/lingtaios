@@ -90,6 +90,50 @@ function Gate-On($name) {
     return [bool]$g.enabled
 }
 
+function Count-VerifyToolsThisTurn($transcriptPath, $verifyTools) {
+    # How many query-type tool calls happened since the last REAL human message.
+    #
+    # Transcript is JSONL. A human turn is type=="user" whose message.content is a
+    # STRING; tool results are also type=="user" but carry a content ARRAY of
+    # tool_result blocks. Getting that distinction wrong makes every turn look
+    # like it starts at the last tool result -- i.e. always zero tools -- and the
+    # gate would fire on every single reply.
+    #
+    # Returns: -1 when the transcript cannot be read/parsed. -1 is NOT zero.
+    # Zero means "verified: it queried nothing". -1 means "cannot tell", and the
+    # caller must fail open and say so -- a gate that silently treats "unknown"
+    # as "guilty" trains people to disable it.
+    if (-not $transcriptPath -or -not (Test-Path -LiteralPath $transcriptPath)) { return -1 }
+    try {
+        $lines = Get-Content -LiteralPath $transcriptPath -Encoding UTF8 -Tail 900
+    } catch { return -1 }
+    if (-not $lines) { return -1 }
+
+    $startIdx = 0
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $ln = $lines[$i]
+        if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+        if ($ln -notmatch '"type"\s*:\s*"user"') { continue }
+        try { $o = $ln | ConvertFrom-Json } catch { continue }
+        if ([string]$o.type -ne 'user') { continue }
+        $c = $o.message.content
+        if ($c -is [string] -and -not [string]::IsNullOrWhiteSpace($c)) { $startIdx = $i; break }
+    }
+
+    $n = 0
+    for ($i = $startIdx; $i -lt $lines.Count; $i++) {
+        $ln = $lines[$i]
+        if ([string]::IsNullOrWhiteSpace($ln)) { continue }
+        if ($ln -notmatch '"tool_use"') { continue }
+        try { $o = $ln | ConvertFrom-Json } catch { continue }
+        if ([string]$o.type -ne 'assistant') { continue }
+        foreach ($blk in ($o.message.content)) {
+            if ([string]$blk.type -eq 'tool_use' -and ($verifyTools -contains [string]$blk.name)) { $n++ }
+        }
+    }
+    return $n
+}
+
 function Hash-Text($t) {
     $md5 = [Security.Cryptography.MD5]::Create()
     $bytes = [Text.Encoding]::UTF8.GetBytes([string]$t)
@@ -220,6 +264,44 @@ if ($evtName -eq 'Stop' -or $evtName -eq 'SubagentStop') {
                 hits    = $hits
             }
             $notices += (Fill $g2.notice @{ hits = ($hits -join ' / ') })
+        }
+    }
+
+    # ---- R-L0-006 claiming something is live without verifying it -----------
+    # Pit S3, six occurrences, the most-bitten entry in the whole library.
+    if (Gate-On 'claim') {
+        $g6 = $script:Cfg.gates.claim
+        $chits = @()
+        foreach ($p in $g6.claim_phrases) { if ($msg -and $msg.Contains([string]$p)) { $chits += [string]$p } }
+        if ($chits.Count -gt 0) {
+            $nv = Count-VerifyToolsThisTurn ([string]$payload.transcript_path) $g6.verify_tools
+            if ($nv -lt 0) {
+                # Cannot tell. Fail open, out loud -- never guess guilty.
+                $notices += [string]$g6.transcript_unreadable_notice
+            } elseif ($nv -eq 0) {
+                $cn = 0
+                if ($state.ContainsKey('claim_blocks')) { $cn = [int]$state['claim_blocks'] }
+                $cn = $cn + 1
+                if ($cn -gt [int]$g6.max_consecutive_blocks) {
+                    $state['claim_blocks'] = 0
+                    Save-State $sid $state
+                    Write-Trace @{ rule = [string]$g6.rule_id; gate = 'claim'; action = 'released'
+                                   session = $sid; count = $cn; hits = $chits }
+                    $notices += (Fill $g6.release_notice @{ count = $cn })
+                } else {
+                    $state['claim_blocks'] = $cn
+                    Save-State $sid $state
+                    Write-Trace @{ rule = [string]$g6.rule_id; gate = 'claim'; action = 'block'
+                                   session = $sid; count = $cn; hits = $chits; verify_tools = 0 }
+                    Emit-Json @{ decision = 'block'; reason = (Fill $g6.block_reason @{ hits = ($chits -join ' / ') }) }
+                    exit 0
+                }
+            } else {
+                if ($state.ContainsKey('claim_blocks') -and [int]$state['claim_blocks'] -gt 0) {
+                    $state['claim_blocks'] = 0
+                    Save-State $sid $state
+                }
+            }
         }
     }
 

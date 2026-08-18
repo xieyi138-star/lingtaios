@@ -42,7 +42,7 @@ RAW="$(cat)"
 # user; we use whatever is already on the machine. If none works the gate cannot
 # run, and that must be said out loud rather than swallowed.
 #
-# ⛔ `command -v` is NOT proof that a tool runs. On Windows, `command -v python3`
+# !! `command -v` is NOT proof that a tool runs. On Windows, `command -v python3`
 #    resolves to the Microsoft Store stub in WindowsApps: it exists, it is
 #    executable, and it does nothing useful. Trusting the lookup made every
 #    config read return empty, so master_switch read as "" (gate off), the
@@ -71,11 +71,11 @@ fi
 export PYTHONIOENCODING=utf-8
 
 # q <json-text> <path>   -> raw value ("" when absent)
-# ⛔ Every reader here writes bytes, never print().
+# !! Every reader here writes bytes, never print().
 #    On Windows, Python's text-mode stdout turns "\n" into "\r\n", so each value
 #    came back with a trailing CR. Symptoms looked unrelated: tool matching
 #    compared "Bash\r" against "Bash" (danger gate never fired) and the regex
-#    became "^【证据】\r" (evidence gate blocked every valid reply). One cause,
+#    became "^<evidence-header>\r" (evidence gate blocked every valid reply). One cause,
 #    two opposite failures -- and invisible until `cat -A`.
 #    The trailing `tr -d '\r'` is belt-and-braces for other readers.
 q() {
@@ -129,6 +129,63 @@ CFGTXT="$(cat "$CFG")"
 }
 
 gate_on() { [ "$(q "$CFGTXT" ".gates.$1.enabled")" = "true" ]; }
+
+# count_verify_tools <transcript_path> <tool1,tool2,...>
+#   -> number of query-type tool calls since the last REAL human message.
+#   -> -1 when it cannot be determined. -1 is NOT zero: zero means "checked,
+#      it queried nothing"; -1 means "cannot tell", and the caller must fail
+#      open and say so. A gate that silently reads "unknown" as "guilty"
+#      gets disabled by its user within the day.
+#
+# A human turn is type=="user" whose message.content is a STRING. Tool results
+# are also type=="user" but carry a content ARRAY -- confusing the two makes
+# every turn start at the last tool result, so the count is always zero and the
+# gate fires on every reply.
+count_verify_tools() {
+  local tp="$1" tools="$2" py=""
+  [ -f "$tp" ] || { echo -1; return; }
+  # This one needs real parsing; jq can do it but the boundary scan is far
+  # easier to get right in python. If neither python is present we say -1
+  # rather than guessing.
+  for c in python3 python py; do
+    if command -v "$c" >/dev/null 2>&1 && printf '{"a":1}' | "$c" -c 'import json,sys;json.load(sys.stdin)' >/dev/null 2>&1; then
+      py="$c"; break
+    fi
+  done
+  [ -n "$py" ] || { echo -1; return; }
+  TOOLS="$tools" "$py" - "$tp" <<'PYEOF' 2>/dev/null || echo -1
+import json, os, sys
+tools = set(os.environ.get("TOOLS", "").split(","))
+try:
+    rows = []
+    with open(sys.argv[1], encoding="utf-8") as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rows.append(json.loads(ln))
+            except ValueError:
+                pass
+except OSError:
+    print(-1); raise SystemExit(0)
+start = 0
+for i in range(len(rows) - 1, -1, -1):
+    r = rows[i]
+    if r.get("type") == "user" and isinstance(r.get("message", {}).get("content"), str) \
+            and r["message"]["content"].strip():
+        start = i
+        break
+n = 0
+for r in rows[start:]:
+    if r.get("type") != "assistant":
+        continue
+    for blk in (r.get("message", {}).get("content") or []):
+        if isinstance(blk, dict) and blk.get("type") == "tool_use" and blk.get("name") in tools:
+            n += 1
+print(n)
+PYEOF
+}
 
 EVT="$(q "$RAW" '.hook_event_name')"
 SID="$(q "$RAW" '.session_id')"
@@ -190,6 +247,42 @@ if [ "$EVT" = "Stop" ] || [ "$EVT" = "SubagentStop" ]; then
       HITS="${HITS% / }"
       trace "{\"rule\":$(json_escape "$(q "$CFGTXT" '.gates.redline.rule_id')"),\"gate\":\"redline\",\"action\":\"warn\",\"session\":$(json_escape "$SID"),\"hits\":$(json_escape "$HITS"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
       NOTICES="$(fill "$(q "$CFGTXT" '.gates.redline.notice')" hits "$HITS")"
+    fi
+  fi
+
+  # ---- R-L0-006 claiming something is live without verifying it -------------
+  # Pit S3: six occurrences, the most-bitten entry in the library.
+  if gate_on claim; then
+    CHITS=""
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      case "$MSG" in *"$p"*) CHITS="$CHITS$p / " ;; esac
+    done <<< "$(qa "$CFGTXT" '.gates.claim.claim_phrases')"
+    if [ -n "$CHITS" ]; then
+      CHITS="${CHITS% / }"
+      VT="$(qa "$CFGTXT" '.gates.claim.verify_tools' | tr '\n' ',' | sed 's/,$//')"
+      NV="$(count_verify_tools "$(q "$RAW" '.transcript_path')" "$VT")"
+      RID6="$(q "$CFGTXT" '.gates.claim.rule_id')"
+      if [ "$NV" -lt 0 ] 2>/dev/null; then
+        NOTICES="$NOTICES
+$(q "$CFGTXT" '.gates.claim.transcript_unreadable_notice')"
+      elif [ "$NV" -eq 0 ] 2>/dev/null; then
+        CN="$(state_get claim_blocks)"; CN="${CN:-0}"; CN=$((CN + 1))
+        MAXC="$(q "$CFGTXT" '.gates.claim.max_consecutive_blocks')"; MAXC="${MAXC:-2}"
+        if [ "$CN" -gt "$MAXC" ]; then
+          state_set claim_blocks 0
+          trace "{\"rule\":$(json_escape "$RID6"),\"gate\":\"claim\",\"action\":\"released\",\"session\":$(json_escape "$SID"),\"count\":$CN,\"hits\":$(json_escape "$CHITS"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+          NOTICES="$NOTICES
+$(fill "$(q "$CFGTXT" '.gates.claim.release_notice')" count "$CN")"
+        else
+          state_set claim_blocks "$CN"
+          trace "{\"rule\":$(json_escape "$RID6"),\"gate\":\"claim\",\"action\":\"block\",\"session\":$(json_escape "$SID"),\"count\":$CN,\"hits\":$(json_escape "$CHITS"),\"verify_tools\":0,\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+          emit "{\"decision\":\"block\",\"reason\":$(json_escape "$(fill "$(q "$CFGTXT" '.gates.claim.block_reason')" hits "$CHITS")")}"
+          exit 0
+        fi
+      else
+        state_set claim_blocks 0
+      fi
     fi
   fi
 

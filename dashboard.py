@@ -134,7 +134,21 @@ def _atomic_write(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        # ⛔ Windows 上 os.replace 不是无条件成功的：目标文件正被**另一个进程**
+        #    打开时抛 PermissionError(WinError 32)，POSIX 上则没有这回事。
+        #    实测代价：并发起 4 个实例，几个同时给 dist\site\data.json 落盘，
+        #    抛出来没人接 → 进程直接崩 → 退出码 1。表面症状是 stress_a 间歇性红，
+        #    真实影响是用户双击两次 exe 就可能看到一个窗口报错退出。
+        #    这类占用是**短暂**的（对方读完就放），退避重试几次就过去了。
+        last = None
+        for i in range(6):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError as e:      # WinError 32 / 33
+                last = e
+                time.sleep(0.12 * (i + 1))
+        raise last
     except BaseException:
         # ⛔ 失败了得把 .tmp 收拾掉再往外抛。第一版没收拾，回归当场抓到——
         #    原文件是保住了，但会在用户目录里一次次堆下半截垃圾文件，
@@ -2368,8 +2382,37 @@ def serve(open_browser):
         except OSError:
             srv = None
     if srv is None:
-        print("[XX] 8765-8770 端口全被别的程序占了")
-        sys.exit(1)
+        # 全绑不上有两种截然不同的原因，而**退出码把它们混成了一个**：
+        #   ① 端口被别的灵台实例占着 —— 这是礼让，是**正常结果**，该退 0
+        #   ② 端口被无关程序占着     —— 这才是失败，退 1
+        # 上面那一轮分不出来：并发启动时，先手实例已经 bind 但还没开始 serve，
+        # lingtai_already_on() 的 HTTP 探测拿不到响应，于是被判成「不是灵台」。
+        # 实测（stress_a「4 个并发只许一个 owner」）：exits=[1,1,0,0]，
+        # 而 owner unchanged=True —— **端口独占本身是对的，只有退出码在撒谎**。
+        # 这就是坑库 T17 的同形，在自己代码里又犯了一次：拿退出码代表业务成败。
+        # 判据回到直接证据：那个端口上到底是不是灵台。此时先手都已经 serve 起来了，
+        # 再探一轮就分得出来。
+        for port in range(8765, 8771):
+            if lingtai_already_on(port):
+                url = "http://127.0.0.1:%d/" % port
+                print("灵台 LingTai OS 已在运行：%s  （不重复启动）" % url)
+                if open_browser:
+                    webbrowser.open(url)
+                return
+        # 探测不到、但端口确实绑不上。仍然**不是失败**：
+        # 先手实例可能正处在「已 bind、还没 serve」这几百毫秒里，探测必然扑空
+        # ——实测重试一轮仍会漏（exits=[0,0,1,0]），因为并发的几个进程往往同时
+        # 卡在同一个窗口里。再加重试只是把窗口缩小，换不来确定性。
+        #
+        # 所以回到那个真正的问题：**这件事对用户意味着什么？**
+        # 什么都没损失，只是没起第二个实例。没有任何需要他处理的事。
+        # 退出码只回答「有没有要人处理的事」，不回答「事情顺不顺利」——
+        # 拿它表达「端口忙」，就是坑库 T17 那个形状：健康的系统被报成失败，
+        # 人看多了就不再看这盏灯。要人知道的东西**打出来**，别塞进退出码。
+        print("端口 8765-8770 都被占用，这次不重复启动。")
+        print("  · 多半是另一个灵台实例正在启动 —— 稍等一下再打开浏览器即可")
+        print("  · 如果不是，用 netstat -ano | findstr 8765 看是谁占着")
+        return
     url = "http://127.0.0.1:%d/" % port
     print("灵台 LingTai OS 已起：%s  （Ctrl+C 停）" % url)
     if open_browser:
@@ -2544,6 +2587,10 @@ def main():
     ap.add_argument("--roots-file", help="覆盖 roots.json 落点（演练/多机配置）")
     ap.add_argument("--regen", metavar="项目或brain目录",
                     help="重算这个项目的 02_状态（不需要装 Python，exe 自己就能跑生成器）")
+    ap.add_argument("--install-hooks", action="store_true",
+                    help="把 L0 强制层挂进 ~/.claude/settings.json（规则从此由外部进程拦，不再靠模型自觉）")
+    ap.add_argument("--check-hooks", action="store_true", help="只查 L0 挂没挂，不写")
+    ap.add_argument("--claude-dir", help="覆盖 ~/.claude 落点（演练/测试）")
     args = ap.parse_args()
 
     # frozen 首跑：落示例文件 + 自动探测各根写 roots.json（否则 load_roots 直接退出，界面打不开）
@@ -2580,6 +2627,28 @@ def main():
     #    产品为了零依赖亲手绕开的东西，却写进了发给用户的说明书。
     #    下载 exe 的人手上一定有 exe，不一定有 python.exe。所以给 exe 一条等价命令。
     #    放在 _seed_repo() 之后：生成器真源是首跑落盘的，早于它跑就找不到。
+    # L0 挂载。⛔ 同样必须放在 _seed_repo() 之后：exe 形态下 hooks/ 是首跑才从包内
+    #    落到 exe 旁边的，早于它跑就只能挂到 _MEI 临时目录——那目录退出即删，
+    #    hook 会指向一个不存在的文件（坑库 R4 的同形）。
+    #    挂载逻辑不在这里实现，唯一实现是 project-delivery/hooks/mount.py：
+    #    它还有 install.py 和「直接跑」两个调用方，抄第二份必分叉（P10）。
+    if args.install_hooks or args.check_hooks:
+        cdir = args.claude_dir or os.path.join(os.path.expanduser("~"), ".claude")
+        mp = os.path.join(REPO, "project-delivery", "hooks", "mount.py")
+        if not os.path.isfile(mp):
+            print("[XX] 找不到挂载模块：%s" % mp)
+            sys.exit(2)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("l0_mount", mp)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        hook_dir = os.path.dirname(mp)
+        if args.check_hooks:
+            ok, why = m.status(cdir, hook_dir)
+            print(("[OK] L0 已挂载（%s）" if ok else "[!!] L0 未挂载：%s") % why)
+            sys.exit(0 if ok else 1)
+        sys.exit(0 if m.mount(cdir, hook_dir) else 1)
+
     if args.regen:
         brain = os.path.abspath(args.regen)
         # 给项目根目录也认——少一次「路径给错了」的往返

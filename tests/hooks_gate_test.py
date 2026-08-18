@@ -39,16 +39,32 @@ SRC_HOOKS = os.path.join(SKILLS, "project-delivery", "hooks")
 IS_WIN = os.name == "nt"
 
 
+FORCE_SH = "--sh" in sys.argv
+
+
 def _runner(hook_dir):
-    """返回 (argv 前缀, 说明)；这台机器上跑不了任何一版就返回 (None, 原因)。"""
-    if IS_WIN:
+    """返回 (argv 前缀, 说明)；这台机器上跑不了任何一版就返回 (None, 原因)。
+
+    平时按平台选：Windows 走 gate.ps1，其余走 gate.sh。所以 mac/Linux 用户
+    跑这个脚本，验的自然就是他那一份——**这就是 gate.sh 的验证方式**，
+    作者手上没有 POSIX 机器，验不了的那部分只能交给能验的人。
+
+    `--sh` 强制走 gate.sh：在 Windows 的 Git Bash 下也能把这套判据压给它跑一遍。
+    ⛔ 那不等于「在真 POSIX 上验过了」——Git Bash 不是 Linux，用的还是 Windows
+       的 python 和路径语义。它只能证明「测试代码驱动得动 gate.sh、判据逻辑对得上」，
+       证明不了 bash/coreutils 的行为差异。这个区别必须留在嘴上，别在文档里说漏。
+    """
+    if IS_WIN and not FORCE_SH:
         ps = shutil.which("powershell.exe") or shutil.which("powershell")
         if ps:
             return ([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                      os.path.join(hook_dir, "gate.ps1")], "gate.ps1 / PowerShell")
     sh = shutil.which("bash")
     if sh:
-        return ([sh, os.path.join(hook_dir, "gate.sh")], "gate.sh / bash")
+        tag = "gate.sh / bash"
+        if IS_WIN:
+            tag += "（Windows 上的 Git Bash——不等于真 POSIX）"
+        return ([sh, os.path.join(hook_dir, "gate.sh")], tag)
     return (None, "既没有 powershell 也没有 bash")
 
 
@@ -181,6 +197,52 @@ def main():
                          "tool_input": {"command": "git push --force-with-lease origin main"}})
     s.check("--force-with-lease -> 放行（它自带回滚点意识）", out == "", out)
 
+    # ---- R-L0-006 声称生效必须有实查（坑库 S3，全库咬得最多的一条）----------
+    # 判据是两个条件的**合取**：回复里有生效类断言，且这一轮零次查询工具调用。
+    # 所以反向断言有两条，缺一不可：查过了要放行、没声称也要放行。
+    print("\nR-L0-006 声称生效必须有实查（坑库 S3，六起同形）")
+    tdir = os.path.join(work, "transcripts")
+    os.makedirs(tdir)
+
+    def mk(name, rows):
+        p = os.path.join(tdir, name)
+        with io.open(p, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return p
+
+    human = {"type": "user", "message": {"content": "装好了吗"}}
+    used = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}}
+    tres = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
+    plain = {"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}}
+    wrote = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {}}]}}
+
+    t_noq = mk("noq.jsonl", [human, used, tres, human, plain])
+    t_q = mk("q.jsonl", [human, plain, human, used, tres])
+    t_write = mk("w.jsonl", [human, plain, human, wrote, tres])
+
+    def stop_claim(sid, tpath, text):
+        return call(argv, {"hook_event_name": "Stop", "session_id": sid,
+                           "transcript_path": tpath,
+                           "last_assistant_message": hdr + "\n\n" + text})[0]
+
+    out = stop_claim("c1", t_noq, "L0 已生效，服务正常。")
+    s.check("声称生效 + 本轮零实查 -> 必须拦", "R-L0-006" in out, out[:120])
+
+    out = stop_claim("c2", t_q, "L0 已生效。")
+    s.check("声称生效 + 本轮查过 -> 放行（反向）", out == "", out[:120])
+
+    out = stop_claim("c3", t_noq, "改完了，下一步继续。")
+    s.check("没有声称 -> 不进这条闸（反向）", out == "", out[:120])
+
+    # 写了 != 验了（坑库 S2）。Write 不在 verify_tools 里，所以仍该拦。
+    out = stop_claim("c4", t_write, "L0 已生效。")
+    s.check("本轮只 Write 没读 -> 仍要拦（写了不等于验了）", "R-L0-006" in out, out[:120])
+
+    out = stop_claim("c5", os.path.join(tdir, "does_not_exist.jsonl"), "L0 已生效。")
+    s.check("transcript 读不到 -> 不拦（判不出不等于有罪）", "decision" not in out, out[:120])
+    s.check("transcript 读不到 -> 必须出声", "systemMessage" in out, out[:120])
+
     # ---- R-L0-005 开窗注入 --------------------------------------------------
     print("\nR-L0-005 开窗注入")
     out, _ = call(argv, {"hook_event_name": "SessionStart", "session_id": "t14",
@@ -294,7 +356,7 @@ def main():
     # 脚本里的中文字面量会静默变成乱码；如果它出现在**判据**里
     # （曾经写过 -match '^\s*多'），匹配永远为假，而表面上什么都没坏。
     print("\nASCII 不变式（ps1 里写中文 = 判据静默失效）")
-    for fn in ("gate.ps1", "tally.ps1", "loop.ps1"):
+    for fn in ("gate.ps1", "tally.ps1", "loop.ps1", "gate.sh"):
         p = os.path.join(SRC_HOOKS, fn)
         bad = []
         with io.open(p, encoding="utf-8") as f:
@@ -370,6 +432,34 @@ def main():
             still = f.read()
         s.check("坏 settings.json -> 一个字节都不动", still == broken, still[:60])
         s.check("坏 settings.json -> 必须出声", "读不出来" in out, out[-160:])
+
+        # ⑤ 三个入口必须产出同一份配置。
+        # mount.py 是唯一实现，install.py 和 exe 的 --install-hooks 都调它——
+        # 但「都调它」这句话本身要能被证伪，否则哪天有人图省事在某一边抄一份，
+        # 分叉了也没人知道（坑库 P10：同一判据抄多份必分叉，曾抄了 28 份）。
+        mountpy = os.path.join(SRC_HOOKS, "mount.py")
+        dash = os.path.join(BC, "dashboard.py")
+        outs = {}
+        for tag, argv2 in (
+            ("mount", [sys.executable, "-X", "utf8", mountpy]),
+            ("dashboard", [sys.executable, "-X", "utf8", dash, "--install-hooks"]),
+        ):
+            d = os.path.join(work, "cd_" + tag)
+            os.makedirs(d)
+            subprocess.run(argv2 + ["--claude-dir", d],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            p = os.path.join(d, "settings.json")
+            if os.path.isfile(p):
+                with io.open(p, encoding="utf-8") as f:
+                    outs[tag] = json.dumps(json.load(f), sort_keys=True, ensure_ascii=False)
+        with io.open(os.path.join(d1, "settings.json"), encoding="utf-8") as f:
+            outs["install"] = json.dumps(json.load(f), sort_keys=True, ensure_ascii=False)
+        s.check("mount.py 与 install.py 产出一致",
+                outs.get("mount") and outs.get("mount") == outs.get("install"),
+                "mount=%s" % str(outs.get("mount"))[:80])
+        s.check("dashboard --install-hooks 与 install.py 产出一致",
+                outs.get("dashboard") and outs.get("dashboard") == outs.get("install"),
+                "dashboard=%s" % str(outs.get("dashboard"))[:80])
 
     shutil.rmtree(work, ignore_errors=True)
 

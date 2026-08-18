@@ -52,6 +52,13 @@ SOUL = [
     ("装配图（唯一导航真源）",                   "project-delivery/装配图.md",        "project-delivery/装配图.md"),
     ("SKILL 路由器（四真源+开窗五步）",           "project-delivery/SKILL.md",         "project-delivery/SKILL.md"),
     ("派工/验收真源",                            "agent-worksheet/SKILL.md",          "agent-worksheet/SKILL.md"),
+    # L0 强制层：规则的**执行层**。前面那几件是「写下来的灵魂」，这几件是「拦得住的灵魂」。
+    # 少一件的后果不是报错，是整套规则悄悄退回全靠自觉——而那和装好了从外面看一模一样。
+    ("L0 判据（两平台共用的唯一真源）",           "project-delivery/hooks/config.json",       "project-delivery/hooks/config.json"),
+    ("L0 闸门 · Windows",                        "project-delivery/hooks/gate.ps1",          "project-delivery/hooks/gate.ps1"),
+    ("L0 闸门 · POSIX",                          "project-delivery/hooks/gate.sh",           "project-delivery/hooks/gate.sh"),
+    ("L0 挂载（三个入口的唯一实现）",             "project-delivery/hooks/mount.py",          "project-delivery/hooks/mount.py"),
+    ("L0 坑↔闸映射（守护率的真值来源）",          "project-delivery/hooks/pit_gate_map.json", "project-delivery/hooks/pit_gate_map.json"),
 ]
 SEED = ["00_宪法.md", "01_法典.md", "03_在建.md", "04_待办池.md", "05_交接.md",
         "06_提案层.md", "关口清单.md", "规则台账.md", "状态源.示例.json", "状态生成器.py", "README.md"]
