@@ -2590,7 +2590,10 @@ def main():
     ap.add_argument("--install-hooks", action="store_true",
                     help="把 L0 强制层挂进 ~/.claude/settings.json（规则从此由外部进程拦，不再靠模型自觉）")
     ap.add_argument("--check-hooks", action="store_true", help="只查 L0 挂没挂，不写")
+    ap.add_argument("--host", default="claude", choices=["claude", "cursor"],
+                    help="挂到哪个 AI 工具（判据两边共用，只是挂法不同）")
     ap.add_argument("--claude-dir", help="覆盖 ~/.claude 落点（演练/测试）")
+    ap.add_argument("--cursor-dir", help="放 .cursor/ 的目录（默认用户主目录）")
     args = ap.parse_args()
 
     # frozen 首跑：落示例文件 + 自动探测各根写 roots.json（否则 load_roots 直接退出，界面打不开）
@@ -2643,6 +2646,13 @@ def main():
         m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(m)
         hook_dir = os.path.dirname(mp)
+        if args.host == "cursor":
+            td = args.cursor_dir or os.path.expanduser("~")
+            if args.check_hooks:
+                p = os.path.join(td, ".cursor", "hooks.json")
+                print("[i] Cursor 挂载配置：%s（在不在自己看一眼）" % p)
+                sys.exit(0 if os.path.isfile(p) else 1)
+            sys.exit(0 if m.mount_cursor(td, hook_dir) else 1)
         if args.check_hooks:
             ok, why = m.status(cdir, hook_dir)
             print(("[OK] L0 已挂载（%s）" if ok else "[!!] L0 未挂载：%s") % why)

@@ -39,6 +39,11 @@ EVENTS = [
     ("PreToolUse", "Write|Edit|NotebookEdit|Bash|PowerShell"),
 ]
 
+# Cursor 侧的事件名（语义一一对应，只是大小写和粒度不同）。
+# ⚠️ 未在真 Cursor 上验证过——作者手上没有。判定逻辑与 Claude Code 共用同一套
+#    （那套已验），这里只是把它接到另一个宿主的事件上。撞到问题请告诉我们。
+CURSOR_EVENTS = ["sessionStart", "stop", "preToolUse", "beforeShellExecution"]
+
 
 def handler(hook_dir=None):
     """本平台跑闸门的命令。Windows 走 gate.ps1，其余走 gate.sh。"""
@@ -58,6 +63,26 @@ def handler(hook_dir=None):
 def _gate_path(h):
     a = h.get("args") or []
     return a[-1] if a else ""
+
+
+def _gate_script(hook_dir=None):
+    d = hook_dir or HERE
+    return os.path.join(d, "gate.ps1" if os.name == "nt" else "gate.sh")
+
+
+def cursor_command(event, hook_dir=None):
+    """Cursor 的 hook 配置只有一个 `command` 字符串（没有 args 数组），
+    所以宿主和事件名作为参数拼在命令里。
+
+    ⚠️ 这依赖 Cursor 允许 command 带参数。**没在真 Cursor 上验过**——
+       若你那一版只接受裸脚本路径，去 hooks/ 下建个一行的包装脚本
+       调用同一条命令即可，判据不用动。
+    """
+    g = _gate_script(hook_dir)
+    if os.name == "nt":
+        return ('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%s" '
+                '-HostName cursor -EventName %s' % (g, event))
+    return 'bash "%s" --host cursor --event %s' % (g, event)
 
 
 def status(claude_dir, hook_dir=None):
@@ -150,12 +175,98 @@ def mount(claude_dir, hook_dir=None, quiet=False):
     return True
 
 
+def mount_cursor(target_dir, hook_dir=None, quiet=False):
+    """挂到 Cursor 的 `hooks.json`。同样**只增不覆盖**。
+
+    target_dir 是放 `.cursor/` 的地方：给项目根目录就是项目级（进 git、团队共享），
+    给用户主目录就是本机级。
+    """
+    def say(*a):
+        if not quiet:
+            print(*a)
+
+    d = os.path.join(target_dir, ".cursor")
+    p = os.path.join(d, "hooks.json")
+    conf = {}
+    if os.path.isfile(p):
+        try:
+            with open(p, encoding="utf-8-sig") as f:
+                conf = json.load(f)
+        except (OSError, ValueError) as e:
+            say("[!!] hooks.json 存在但读不出来（%s）——没动它。修好语法再跑一次。"
+                % e.__class__.__name__)
+            return False
+        bak = p + ".before-l0"
+        if not os.path.isfile(bak):
+            with open(bak, "w", encoding="utf-8") as f:
+                json.dump(conf, f, ensure_ascii=False, indent=2)
+            say("[OK] 原 hooks.json 已备份：%s" % bak)
+
+    g = _gate_script(hook_dir)
+    if not os.path.isfile(g):
+        say("[XX] 找不到闸门脚本：%s" % g)
+        return False
+
+    conf.setdefault("version", 1)
+    hooks = conf.setdefault("hooks", {})
+    added = []
+    for ev in CURSOR_EVENTS:
+        arr = hooks.setdefault(ev, [])
+        cmd = cursor_command(ev, hook_dir)
+        if any(os.path.normcase(g) in os.path.normcase(str(x.get("command", "")))
+               for x in arr):
+            continue
+        arr.append({"command": cmd})
+        added.append(ev)
+
+    if not added:
+        say("[OK] L0 已经挂在 Cursor 上，未改动")
+        return True
+    if not os.path.isdir(d):
+        os.makedirs(d)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(conf, f, ensure_ascii=False, indent=2)
+    with open(tmp, encoding="utf-8") as f:
+        json.load(f)
+    os.replace(tmp, p)
+    say("[OK] L0 已挂到 Cursor：%s（新增 %s）" % (p, ", ".join(added)))
+    say("     ⚠️ Cursor 那一份**没在真 Cursor 上验过**。装完请确认闸门真的会拦：")
+    say("        随便让 AI 说一句不带证据头的话，看它有没有被打回。")
+    say("        没拦住就是没接上——那和「它在守着」从外面看一模一样。")
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description="挂载 L0 强制层")
+    ap.add_argument("--host", default="claude", choices=["claude", "cursor"],
+                    help="挂到哪个 AI 工具（判据两边共用，只是挂法不同）")
     ap.add_argument("--claude-dir", help="覆盖 ~/.claude 落点（演练/测试）")
+    ap.add_argument("--cursor-dir",
+                    help="放 .cursor/ 的目录：项目根=项目级、主目录=本机级（默认主目录）")
     ap.add_argument("--hook-dir", help="覆盖 hooks 目录（默认本文件所在目录）")
     ap.add_argument("--check", action="store_true", help="只查不写")
     args = ap.parse_args()
+
+    if args.host == "cursor":
+        td = args.cursor_dir or os.path.expanduser("~")
+        if args.check:
+            p = os.path.join(td, ".cursor", "hooks.json")
+            ok = False
+            if os.path.isfile(p):
+                try:
+                    with open(p, encoding="utf-8-sig") as f:
+                        c = json.load(f)
+                    g = os.path.normcase(_gate_script(args.hook_dir))
+                    ok = all(any(g in os.path.normcase(str(x.get("command", "")))
+                                 for x in (c.get("hooks", {}).get(ev) or []))
+                             for ev in CURSOR_EVENTS)
+                except (OSError, ValueError):
+                    ok = False
+            print("[OK] L0 已挂在 Cursor" if ok else "[!!] L0 未挂在 Cursor：%s" % p)
+            sys.exit(0 if ok else 1)
+        sys.exit(0 if mount_cursor(td, args.hook_dir) else 1)
+
     cd = args.claude_dir or os.path.join(os.path.expanduser("~"), ".claude")
     ok, why = status(cd, args.hook_dir)
     if args.check:

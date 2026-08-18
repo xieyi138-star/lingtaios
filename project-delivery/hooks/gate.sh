@@ -15,6 +15,19 @@
 
 set -u
 
+# Which agent tool is calling. The JUDGEMENT is host-independent; only input
+# field names and the block-output shape differ, and both live in config.json
+# under "hosts"/"outputs". Adding a host = editing that JSON, not this script.
+L0_HOST="claude"
+L0_EVENT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host)  L0_HOST="${2:-claude}"; shift 2 ;;
+    --event) L0_EVENT="${2:-}";      shift 2 ;;
+    *) shift ;;
+  esac
+done
+
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CFG="$HOOK_DIR/config.json"
 
@@ -187,8 +200,49 @@ print(n)
 PYEOF
 }
 
-EVT="$(q "$RAW" '.hook_event_name')"
-SID="$(q "$RAW" '.session_id')"
+# ---- host adapter ------------------------------------------------------------
+HOSTQ=".hosts.$L0_HOST"
+if [ -z "$(q "$CFGTXT" "$HOSTQ.name")" ]; then
+  emit "{\"systemMessage\":$(json_escape "[L0] unknown host '$L0_HOST' - gates are OFF. Known hosts live in hooks/config.json.")}"
+  exit 0
+fi
+OUTQ=".outputs.$(q "$CFGTXT" "$HOSTQ.output")"
+
+RAW_EVT="$L0_EVENT"
+[ -z "$RAW_EVT" ] && RAW_EVT="$(q "$RAW" ".$(q "$CFGTXT" "$HOSTQ.event_field")")"
+# !! No quotes around the key: q() splits the path on dots and looks the segment
+#    up verbatim, so `events."Stop"` would search for a key literally named
+#    `"Stop"`, find nothing, and the script would exit silently on every event.
+EVT="$(q "$CFGTXT" "$HOSTQ.events.$RAW_EVT")"
+[ -z "$EVT" ] && exit 0        # event this host fires but L0 does not judge
+
+# nf <logical-name> -> that value out of the host payload
+nf() {
+  local path
+  path="$(q "$CFGTXT" "$HOSTQ.fields.$1")"
+  [ -z "$path" ] && { printf ''; return; }
+  q "$RAW" ".$path"
+}
+
+# emit_decision <block_stop|deny_tool|notice> <text>
+# Falls back to exit 2 (understood by every host we know of) when a host has no
+# template -- but JSON first: stderr goes through the console codepage and these
+# reasons are Chinese.
+emit_decision() {
+  local tpl
+  tpl="$(q "$CFGTXT" "$OUTQ.$1")"
+  if [ -z "$tpl" ]; then
+    printf '%s' "$2" >&2
+    exit 2
+  fi
+  printf '%s' "$tpl" | REASON="$(json_escape "$2")" "$JSON_TOOL" -c '
+import os,sys
+sys.stdout.write(sys.stdin.read().replace("%REASON%", os.environ["REASON"]))
+' 2>/dev/null || printf '%s' "$2" >&2
+  printf '\n'
+}
+
+SID="$(nf session)"
 SID_SAFE="$(printf '%s' "${SID:-nosession}" | tr -c 'A-Za-z0-9_-' '_')"
 
 TDIR="$HOOK_DIR/$(q "$CFGTXT" '.traces.dir')"
@@ -211,7 +265,7 @@ fill() { # fill <template> <token> <value>
 }
 
 # ========================================================== SessionStart =====
-if [ "$EVT" = "SessionStart" ]; then
+if [ "$EVT" = "session_start" ]; then
   gate_on session_start || exit 0
   SKILLS="$(cd "$HOOK_DIR/../.." && pwd)"
   TXT="$(q "$CFGTXT" '.gates.session_start.inject')"
@@ -226,14 +280,14 @@ if [ "$EVT" = "SessionStart" ]; then
   # This gate never blocks, so it can never produce a block/deny row. Without its
   # own record it reads as "never fired" in the ledger -- the same signal that
   # means "or it was never wired". Record the injection.
-  trace "{\"rule\":$(json_escape "$(q "$CFGTXT" '.gates.session_start.rule_id')"),\"gate\":\"session_start\",\"action\":\"inject\",\"session\":$(json_escape "$SID"),\"startup\":$(json_escape "$(q "$RAW" '.startup_type')"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  trace "{\"rule\":$(json_escape "$(q "$CFGTXT" '.gates.session_start.rule_id')"),\"gate\":\"session_start\",\"action\":\"inject\",\"session\":$(json_escape "$SID"),\"host\":$(json_escape "$L0_HOST"),\"startup\":$(json_escape "$(nf startup)"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
   printf '%b\n' "$TXT"
   exit 0
 fi
 
 # ================================================================= Stop ======
-if [ "$EVT" = "Stop" ] || [ "$EVT" = "SubagentStop" ]; then
-  MSG="$(q "$RAW" '.last_assistant_message')"
+if [ "$EVT" = "stop" ]; then
+  MSG="$(nf assistant_text)"
   NOTICES=""
 
   # ---- R-L0-002 redline phrases: record and warn, never block ---------------
@@ -261,7 +315,7 @@ if [ "$EVT" = "Stop" ] || [ "$EVT" = "SubagentStop" ]; then
     if [ -n "$CHITS" ]; then
       CHITS="${CHITS% / }"
       VT="$(qa "$CFGTXT" '.gates.claim.verify_tools' | tr '\n' ',' | sed 's/,$//')"
-      NV="$(count_verify_tools "$(q "$RAW" '.transcript_path')" "$VT")"
+      NV="$(count_verify_tools "$(nf transcript)" "$VT")"
       RID6="$(q "$CFGTXT" '.gates.claim.rule_id')"
       if [ "$NV" -lt 0 ] 2>/dev/null; then
         NOTICES="$NOTICES
@@ -277,7 +331,7 @@ $(fill "$(q "$CFGTXT" '.gates.claim.release_notice')" count "$CN")"
         else
           state_set claim_blocks "$CN"
           trace "{\"rule\":$(json_escape "$RID6"),\"gate\":\"claim\",\"action\":\"block\",\"session\":$(json_escape "$SID"),\"count\":$CN,\"hits\":$(json_escape "$CHITS"),\"verify_tools\":0,\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-          emit "{\"decision\":\"block\",\"reason\":$(json_escape "$(fill "$(q "$CFGTXT" '.gates.claim.block_reason')" hits "$CHITS")")}"
+          emit_decision block_stop "$(fill "$(q "$CFGTXT" '.gates.claim.block_reason')" hits "$CHITS")"
           exit 0
         fi
       else
@@ -318,29 +372,33 @@ $(fill "$(q "$CFGTXT" '.gates.evidence.release_notice')" count "$N")"
         [ -n "$NOTICES" ] && REASON="$REASON
 
 $NOTICES"
-        emit "{\"decision\":\"block\",\"reason\":$(json_escape "$REASON")}"
+        emit_decision block_stop "$REASON"
         exit 0
       fi
     fi
   fi
 
   if [ -n "${NOTICES// }" ]; then
-    emit "{\"systemMessage\":$(json_escape "$NOTICES")}"
+    emit_decision notice "$NOTICES"
   fi
   exit 0
 fi
 
 # ============================================================ PreToolUse =====
-if [ "$EVT" = "PreToolUse" ]; then
-  TOOL="$(q "$RAW" '.tool_name')"
+if [ "$EVT" = "pre_tool" ]; then
+  TOOL="$(nf tool_name)"
 
   # ---- R-L0-003 core source must sit on a rollback point --------------------
   if gate_on rollback; then
     MATCH=0
     while IFS= read -r t; do [ "$t" = "$TOOL" ] && MATCH=1; done <<< "$(qa "$CFGTXT" '.gates.rollback.match_tools')"
+    # Some hosts fire a file-specific event with no tool name (Cursor). Judge on
+    # what the payload actually carries rather than requiring a tool name --
+    # otherwise the gate silently stops firing on that host.
+    [ -z "$TOOL" ] && [ -n "$(nf file_path)" ] && MATCH=1
     if [ $MATCH -eq 1 ]; then
-      TARGET="$(q "$RAW" '.tool_input.file_path')"
-      [ -z "$TARGET" ] && TARGET="$(q "$RAW" '.tool_input.notebook_path')"
+      TARGET="$(nf file_path)"
+      [ -z "$TARGET" ] && TARGET="$(nf notebook_path)"
       if [ -n "$TARGET" ]; then
         LOWER="$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]')"
         PROT=0
@@ -360,15 +418,14 @@ if [ "$EVT" = "PreToolUse" ]; then
           done
           # "git is missing" and "git says not a repo" are different findings.
           if ! command -v git >/dev/null 2>&1; then
-            emit "{\"systemMessage\":\"[L0 R-L0-003] git executable not found - rollback check skipped.\"}"
+            emit_decision notice "[L0 R-L0-003] git executable not found - rollback check skipped."
             exit 0
           fi
           TOP="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
           if [ -z "${TOP// }" ]; then
             RID="$(q "$CFGTXT" '.gates.rollback.rule_id')"
             trace "{\"rule\":$(json_escape "$RID"),\"gate\":\"rollback\",\"action\":\"deny\",\"session\":$(json_escape "$SID"),\"tool\":$(json_escape "$TOOL"),\"path\":$(json_escape "$TARGET"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-            REASON="$(fill "$(q "$CFGTXT" '.gates.rollback.block_reason')" path "$TARGET")"
-            emit "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":$(json_escape "$REASON")}}"
+            emit_decision deny_tool "$(fill "$(q "$CFGTXT" '.gates.rollback.block_reason')" path "$TARGET")"
             exit 0
           fi
         fi
@@ -380,8 +437,10 @@ if [ "$EVT" = "PreToolUse" ]; then
   if gate_on danger; then
     MATCH=0
     while IFS= read -r t; do [ "$t" = "$TOOL" ] && MATCH=1; done <<< "$(qa "$CFGTXT" '.gates.danger.match_tools')"
+    # Same as above: judge the command when the host gives one but no tool name.
+    [ -z "$TOOL" ] && [ -n "$(nf command)" ] && MATCH=1
     if [ $MATCH -eq 1 ]; then
-      CMD="$(q "$RAW" '.tool_input.command')"
+      CMD="$(nf command)"
       if [ -n "$CMD" ]; then
         HITRX=""
         while IFS= read -r rx; do
@@ -400,7 +459,7 @@ if [ "$EVT" = "PreToolUse" ]; then
           trace "{\"rule\":$(json_escape "$RID"),\"gate\":\"danger\",\"action\":\"deny\",\"session\":$(json_escape "$SID"),\"tool\":$(json_escape "$TOOL"),\"command\":$(json_escape "$CMD"),\"pattern\":$(json_escape "$HITRX"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
           REASON="$(fill "$(q "$CFGTXT" '.gates.danger.block_reason')" command "$CMD")"
           REASON="$(fill "$REASON" pattern "$HITRX")"
-          emit "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":$(json_escape "$REASON")}}"
+          emit_decision deny_tool "$REASON"
           exit 0
         fi
       fi

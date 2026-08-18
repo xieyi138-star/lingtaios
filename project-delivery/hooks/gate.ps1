@@ -16,6 +16,17 @@
 # gate at all. But a silent fallback is worse than none, so every internal
 # failure is surfaced via systemMessage and written to traces.
 
+param(
+    # Which agent tool is calling us. The JUDGEMENT is host-independent; only the
+    # input field names and the block-output shape differ, and both live in
+    # config.json under "hosts"/"outputs". Adding a host = editing that JSON.
+    # !! Not $Host -- that is a PowerShell automatic variable.
+    [string]$HostName = 'claude',
+    # Some hosts (Cursor) do not put an event name in the payload; the mount
+    # config passes it explicitly instead of us guessing the payload shape.
+    [string]$EventName = ''
+)
+
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 
@@ -134,6 +145,46 @@ function Count-VerifyToolsThisTurn($transcriptPath, $verifyTools) {
     return $n
 }
 
+# ------------------------------------------------------------ host adapter ---
+
+function Get-ByPath($obj, $path) {
+    # "tool_input.command" -> $obj.tool_input.command ; $null when any hop misses
+    if (-not $path) { return $null }
+    $cur = $obj
+    foreach ($seg in ([string]$path).Split('.')) {
+        if ($null -eq $cur) { return $null }
+        $cur = $cur.$seg
+    }
+    return $cur
+}
+
+function Normalize-Payload($payload, $hostCfg) {
+    # Host payload -> the flat shape the rules below are written against.
+    # Every rule reads from here, never from $payload directly -- that is what
+    # keeps the judgement free of any one vendor's field names.
+    $n = @{}
+    foreach ($p in $hostCfg.fields.PSObject.Properties) {
+        $n[$p.Name] = Get-ByPath $payload ([string]$p.Value)
+    }
+    return $n
+}
+
+function Emit-Decision($kind, $reasonText) {
+    # Block/deny/notice output shape per host, template from config.json.
+    # !! JSON, not `exit 2` + stderr: both hosts accept exit 2, but stderr goes
+    #    through the console codepage and the reason text is Chinese. JSON keeps
+    #    it as \uXXXX on the wire. exit 2 stays the fallback if a host has no
+    #    template.
+    $tpl = $null
+    try { $tpl = [string]$script:Cfg.outputs.($hostCfg.output).$kind } catch { }
+    $json = ($reasonText | ConvertTo-Json -Compress)
+    if ([string]::IsNullOrWhiteSpace($tpl)) {
+        [Console]::Error.Write([string]$reasonText)
+        exit 2
+    }
+    Write-Output ($tpl.Replace('%REASON%', $json))
+}
+
 function Hash-Text($t) {
     $md5 = [Security.Cryptography.MD5]::Create()
     $bytes = [Text.Encoding]::UTF8.GetBytes([string]$t)
@@ -182,12 +233,25 @@ if (-not $script:Cfg.master_switch) {
     exit 0
 }
 
-$evtName = [string]$payload.hook_event_name
-$sid = [string]$payload.session_id
+# ---- resolve host, normalize the payload -----------------------------------
+$hostCfg = $null
+try { $hostCfg = $script:Cfg.hosts.$HostName } catch { }
+if (-not $hostCfg) {
+    Emit-Json @{ systemMessage = "[L0] unknown host '$HostName' - gates are OFF. Known hosts live in hooks/config.json." }
+    exit 0
+}
+$rawEvent = $EventName
+if (-not $rawEvent) { $rawEvent = [string](Get-ByPath $payload $hostCfg.event_field) }
+$evt = ''
+try { $evt = [string]$hostCfg.events.$rawEvent } catch { }
+if (-not $evt) { exit 0 }          # event this host fires but L0 does not judge
+
+$N = Normalize-Payload $payload $hostCfg
+$sid = [string]$N['session']
 
 # ============================================================ SessionStart ===
 
-if ($evtName -eq 'SessionStart') {
+if ($evt -eq 'session_start') {
     if (-not (Gate-On 'session_start')) { exit 0 }
     $g = $script:Cfg.gates.session_start
     # HookDir = <skills>\project-delivery\hooks  ->  two levels up is the repo root.
@@ -236,7 +300,8 @@ if ($evtName -eq 'SessionStart') {
         gate    = 'session_start'
         action  = 'inject'
         session = $sid
-        startup = [string]$payload.startup_type
+        host    = $HostName
+        startup = [string]$N['startup']
     }
     # SessionStart: plain stdout is injected into context.
     Write-Output $text
@@ -245,8 +310,8 @@ if ($evtName -eq 'SessionStart') {
 
 # =================================================================== Stop ====
 
-if ($evtName -eq 'Stop' -or $evtName -eq 'SubagentStop') {
-    $msg = [string]$payload.last_assistant_message
+if ($evt -eq 'stop') {
+    $msg = [string]$N['assistant_text']
     $state = Read-State $sid
     $notices = @()
 
@@ -274,7 +339,7 @@ if ($evtName -eq 'Stop' -or $evtName -eq 'SubagentStop') {
         $chits = @()
         foreach ($p in $g6.claim_phrases) { if ($msg -and $msg.Contains([string]$p)) { $chits += [string]$p } }
         if ($chits.Count -gt 0) {
-            $nv = Count-VerifyToolsThisTurn ([string]$payload.transcript_path) $g6.verify_tools
+            $nv = Count-VerifyToolsThisTurn ([string]$N['transcript']) $g6.verify_tools
             if ($nv -lt 0) {
                 # Cannot tell. Fail open, out loud -- never guess guilty.
                 $notices += [string]$g6.transcript_unreadable_notice
@@ -293,7 +358,7 @@ if ($evtName -eq 'Stop' -or $evtName -eq 'SubagentStop') {
                     Save-State $sid $state
                     Write-Trace @{ rule = [string]$g6.rule_id; gate = 'claim'; action = 'block'
                                    session = $sid; count = $cn; hits = $chits; verify_tools = 0 }
-                    Emit-Json @{ decision = 'block'; reason = (Fill $g6.block_reason @{ hits = ($chits -join ' / ') }) }
+                    Emit-Decision 'block_stop' (Fill $g6.block_reason @{ hits = ($chits -join ' / ') })
                     exit 0
                 }
             } else {
@@ -359,28 +424,31 @@ if ($evtName -eq 'Stop' -or $evtName -eq 'SubagentStop') {
                 }
                 $reason = [string]$g1.block_reason
                 if ($notices.Count -gt 0) { $reason = $reason + "`n`n" + ($notices -join "`n") }
-                Emit-Json @{ decision = 'block'; reason = $reason }
+                Emit-Decision 'block_stop' $reason
                 exit 0
             }
         }
     }
 
-    if ($notices.Count -gt 0) { Emit-Json @{ systemMessage = ($notices -join "`n") } }
+    if ($notices.Count -gt 0) { Emit-Decision 'notice' ($notices -join "`n") }
     exit 0
 }
 
 # ============================================================= PreToolUse ====
 
-if ($evtName -eq 'PreToolUse') {
-    $tool = [string]$payload.tool_name
+if ($evt -eq 'pre_tool') {
+    $tool = [string]$N['tool_name']
     $state = Read-State $sid
 
     # ---- R-L0-003 core source must sit on a rollback point ------------------
     if (Gate-On 'rollback') {
         $g3 = $script:Cfg.gates.rollback
-        if ($g3.match_tools -contains $tool) {
-            $target = [string]$payload.tool_input.file_path
-            if (-not $target) { $target = [string]$payload.tool_input.notebook_path }
+        # Some hosts fire a file/shell specific event with no tool name at all
+        # (Cursor's beforeShellExecution only carries `command`). Fall back to
+        # what the payload actually contains instead of requiring a tool name.
+        if (($g3.match_tools -contains $tool) -or (-not $tool -and $N['file_path'])) {
+            $target = [string]$N['file_path']
+            if (-not $target) { $target = [string]$N['notebook_path'] }
             if ($target) {
                 $lower = $target.ToLower()
                 $protected = $false
@@ -405,7 +473,7 @@ if ($evtName -eq 'PreToolUse') {
                     $gitCmd = $null
                     try { $gitCmd = Get-Command git -ErrorAction SilentlyContinue } catch { }
                     if (-not $gitCmd) {
-                        Emit-Json @{ systemMessage = "[L0 R-L0-003] git executable not found - rollback check skipped for: $target" }
+                        Emit-Decision 'notice' "[L0 R-L0-003] git executable not found - rollback check skipped for: $target"
                         exit 0
                     }
 
@@ -434,13 +502,7 @@ if ($evtName -eq 'PreToolUse') {
                             tool    = $tool
                             path    = $target
                         }
-                        Emit-Json @{
-                            hookSpecificOutput = @{
-                                hookEventName            = 'PreToolUse'
-                                permissionDecision       = 'deny'
-                                permissionDecisionReason = (Fill $g3.block_reason @{ path = $target })
-                            }
-                        }
+                        Emit-Decision 'deny_tool' (Fill $g3.block_reason @{ path = $target })
                         exit 0
                     }
                 }
@@ -451,8 +513,9 @@ if ($evtName -eq 'PreToolUse') {
     # ---- R-L0-004 irreversible commands -------------------------------------
     if (Gate-On 'danger') {
         $g4 = $script:Cfg.gates.danger
-        if ($g4.match_tools -contains $tool) {
-            $cmd = [string]$payload.tool_input.command
+        # Same as above: judge the command when the host gives one but no tool name.
+        if (($g4.match_tools -contains $tool) -or (-not $tool -and $N['command'])) {
+            $cmd = [string]$N['command']
             if ($cmd) {
                 $hitPattern = $null
                 foreach ($rx in $g4.danger_patterns) {
@@ -496,13 +559,7 @@ if ($evtName -eq 'PreToolUse') {
                         command = $cmd
                         pattern = $hitPattern
                     }
-                    Emit-Json @{
-                        hookSpecificOutput = @{
-                            hookEventName            = 'PreToolUse'
-                            permissionDecision       = 'deny'
-                            permissionDecisionReason = (Fill $g4.block_reason @{ command = $cmd; pattern = $hitPattern })
-                        }
-                    }
+                    Emit-Decision 'deny_tool' (Fill $g4.block_reason @{ command = $cmd; pattern = $hitPattern })
                     exit 0
                 }
             }

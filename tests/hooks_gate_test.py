@@ -250,6 +250,58 @@ def main():
     s.check("SessionStart -> 注入非空", len(out) > 50, out[:80])
     s.check("注入里带生效闸清单", "R-L0-001" in out, out[:120])
 
+    # ---- 宿主适配层：同一条判据，不同宿主的输出形状 -------------------------
+    # L0 的价值是「规则在模型外面被拦住」，不是「只能在 Claude Code 里被拦住」。
+    # 判据与宿主无关，被锁死的只有输入字段名和阻断输出的形状——两者都在 config.json。
+    # ⛔ 这几条验的是**适配层没把判据带歪**：换个宿主，该拦的仍拦、该放的仍放。
+    # ⛔ 必须跑在「总开关」和「配置损坏」那两节**之前**——那两节会把沙盒里的
+    #    config.json 改坏，之后所有 gate 调用都走 fail-open 分支。
+    #    第一版就加在了它们后面，6 条全红，而手工跑同样的输入是通的。
+    print("\n宿主适配（同一判据，不同宿主）")
+    if IS_WIN and not FORCE_SH:
+        _ps = shutil.which("powershell.exe") or shutil.which("powershell")
+
+        def gate(hostname, event, payload):
+            argv2 = [_ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                     os.path.join(hook_dir, "gate.ps1"), "-HostName", hostname]
+            if event:
+                argv2 += ["-EventName", event]
+            return call(argv2, payload)[0]
+
+        out = gate("cursor", "stop", {"session_id": "cu1", "text": "我改好了。"})
+        s.check("cursor: 缺证据头 -> 拦", '"permission":"deny"' in out, out[:120])
+        s.check("cursor: 用 cursor 的输出形状（不是 claude 的）",
+                '"agent_message"' in out and '"decision"' not in out, out[:120])
+
+        out = gate("cursor", "stop", {"session_id": "cu2", "text": hdr + "\n\n做完了。"})
+        s.check("cursor: 有证据头 -> 放行（反向）", out == "", out[:120])
+
+        # Cursor 的 beforeShellExecution 只给 command，没有 tool_name。
+        # 判据要是依赖工具名，换宿主就静默失效——拦不住，而且没人会知道。
+        danger = "rm " + "-rf" + " /tmp/zz"
+        out = gate("cursor", "beforeShellExecution", {"session_id": "cu3", "command": danger})
+        s.check("cursor: 只给 command 没给 tool_name -> 仍拦得住",
+                '"permission":"deny"' in out, out[:120])
+
+        out = gate("cursor", "beforeShellExecution",
+                   {"session_id": "cu4", "command": "git status --short"})
+        s.check("cursor: 安全命令 -> 放行（反向）", out == "", out[:120])
+
+        out = gate("nope", None, {"hook_event_name": "Stop", "session_id": "cu5",
+                                  "last_assistant_message": "x"})
+        s.check("未知宿主 -> 不拦但出声（不许静默失效）",
+                "systemMessage" in out and "unknown host" in out, out[:120])
+
+        # 每个宿主都得说清自己验没验过。没这一栏的话，「作者实测过」和
+        # 「照着文档写的」在用户眼里长得一模一样。
+        with io.open(os.path.join(SRC_HOOKS, "config.json"), encoding="utf-8") as f:
+            hosts = json.load(f)["hosts"]
+        bad = [k for k, v in hosts.items()
+               if not k.startswith("_") and "verified" not in v]
+        s.check("每个宿主都标了验没验过", not bad, "缺 verified：%s" % bad)
+    else:
+        print("  (非 Windows / --sh 模式，跳过 ps1 宿主适配检查)")
+
     # ---- traces 真的写下去了没有 -------------------------------------------
     print("\n记账（规则台账那两栏的真值来源）")
     tdir = os.path.join(hook_dir, "traces")

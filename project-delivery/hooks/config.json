@@ -140,6 +140,76 @@
     }
   },
 
+  "hosts": {
+    "_readme": "宿主适配层。L0 的判据（上面 gates 那一大段）与宿主无关；被锁死的只有两处——**输入字段叫什么**、**挂载配置长什么样**。都收在这里，所以接一个新宿主是改这份 JSON，不是改脚本。",
+    "_为什么能通用": "主流 agent 工具（Claude Code / Cursor / Windsurf / Cline）都提供了 Intercept→Evaluate→Enforce 这套 hook，而且**都支持 exit 2 表示阻断**。差的只是事件名大小写和字段命名。",
+    "_接一个新宿主要提供什么": "三件：① event_field（输入里哪个字段说明这是什么事件）② events（该宿主的事件名 → L0 内部事件名）③ fields（L0 要的东西在该宿主输入里的路径，点号分隔）。外加 mount.py 里一段挂载配置的形状。",
+
+    "claude": {
+      "name": "Claude Code",
+      "verified": true,
+      "_verified": "本机实测 + 三平台 CI 全绿。",
+      "event_field": "hook_event_name",
+      "events": {
+        "Stop": "stop",
+        "SubagentStop": "stop",
+        "PreToolUse": "pre_tool",
+        "SessionStart": "session_start"
+      },
+      "fields": {
+        "session": "session_id",
+        "assistant_text": "last_assistant_message",
+        "tool_name": "tool_name",
+        "command": "tool_input.command",
+        "file_path": "tool_input.file_path",
+        "notebook_path": "tool_input.notebook_path",
+        "transcript": "transcript_path",
+        "startup": "startup_type"
+      },
+      "output": "claude"
+    },
+
+    "cursor": {
+      "name": "Cursor",
+      "verified": false,
+      "_verified": "⚠️ **没有在真 Cursor 上跑过**——作者手上没有。字段映射依据其 hooks 文档写成，判定逻辑与 Claude Code 共用同一套（已验）。装上后请跑一次自检确认，撞到问题正是我们想知道的。",
+      "event_field": "hook_event_name",
+      "_event_field": "Cursor 的输入里没有统一的事件名字段，改由挂载时用 --event 显式传入，脚本会把它填成这个键。这样不必猜它的输入形状。",
+      "events": {
+        "stop": "stop",
+        "afterAgentResponse": "stop",
+        "preToolUse": "pre_tool",
+        "beforeShellExecution": "pre_tool",
+        "sessionStart": "session_start"
+      },
+      "fields": {
+        "session": "session_id",
+        "assistant_text": "text",
+        "tool_name": "tool_name",
+        "command": "command",
+        "file_path": "file_path",
+        "notebook_path": "path",
+        "transcript": "transcript_path",
+        "startup": "source"
+      },
+      "output": "cursor"
+    }
+  },
+
+  "outputs": {
+    "_readme": "阻断怎么表达。两家都认 exit 2，但 JSON 更可控（中文走 \\uXXXX 转义，不受控制台编码影响），所以优先 JSON、exit 2 兜底。",
+    "claude": {
+      "block_stop": "{\"decision\":\"block\",\"reason\":%REASON%}",
+      "deny_tool": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%REASON%}}",
+      "notice": "{\"systemMessage\":%REASON%}"
+    },
+    "cursor": {
+      "block_stop": "{\"permission\":\"deny\",\"agent_message\":%REASON%}",
+      "deny_tool": "{\"permission\":\"deny\",\"agent_message\":%REASON%,\"user_message\":%REASON%}",
+      "notice": "{\"permission\":\"allow\",\"user_message\":%REASON%}"
+    }
+  },
+
   "paths": {
     "_readme": "相对 {SKILLS} 根的真源位置。写在这里而不是脚本里，是因为脚本必须保持纯 ASCII，拼不出中文文件名。改真源位置时先改装配图，再改这里。",
     "map": "project-delivery/装配图.md",
