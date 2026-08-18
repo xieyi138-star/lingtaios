@@ -1,0 +1,99 @@
+{
+  "_readme": "坑 ↔ 守护者 的映射真源。回答一个问题：这条坑，现在有没有东西在守？",
+
+  "_为什么需要它": "坑库 87 条每条都带失效判据，而那一栏写的其实就是「什么闸门能让这条坑结构性消失」——P7 的判据是『破坏性测试框架强制先断言破坏前后 sha 不同』，P22 是『取键一律走约定常量，键不存在直接抛错』。那不是描述，那是规格说明书。但坑库自己不知道哪些规格已经建成了，于是「已经守住的」和「还没人管的」躺在同一张表里，长得一模一样。这个文件就是把这两类分开。",
+
+  "_它产出什么": "hooks/loop.ps1 读它 + 坑库 + config.json + traces，算出：① 守护率 ② 缺闸清单（下一步该建什么）③ 哑闸清单（有闸但零触发，要先排除「没接上」）。守护率会随使用增长——那是「用的人越多这套方法越准」唯一可量化的形态。",
+
+  "_入库红线": [
+    "⛔ 只登记**亲眼验证过**的守护关系。没验过就空着——一条假的映射会让缺闸清单少一行，而那一行正是它该提醒你去建的东西。",
+    "⛔ 『有个测试文件名字看起来相关』不算验证过。判据是：这个守护者失效时，那条坑会不会被放过？答不出就别登记。",
+    "⛔ 空着不丢人，填错才贵。坑库自己第 143 行写过同一句话：判据写错了比空着更坏。"
+  ],
+
+  "kinds": {
+    "gate": "L0 闸门在拦（config.json 里的规则）",
+    "regression": "回归测试在守（跑绿才算，跳过不算）",
+    "structural": "结构上已经不可能发生（这类坑该走退休流程，不是加守护）"
+  },
+
+  "_guards 字段的写法": "文件路径一律**相对 skills 根**（如 brain-console/tests/x.py）；规则 ID 以 R-L0- 开头（如 R-L0-001，通配写 R-L0-*）。两种混着写过一版，校验断言当场分不清哪个该查文件存在——统一后 hooks_gate_test.py 会逐条验：map 里的坑号必须真在坑库里，引用的文件必须真在磁盘上。**守护率能靠瞎填变高，这两条断言让它不能。**",
+
+  "map": {
+    "P1":  { "guards": ["brain-console/tests/hooks_gate_test.py", "brain-console/tests/soul_manifest.py"], "kind": "regression",
+             "how": "每条硬拦都配反向断言；量具自身喂坏样本必须报红。本窗兑现过一次：改 config 一个字 → 5 条红",
+             "verified": "2026-08-17" },
+
+    "P10": { "guards": ["brain-console/release_sync.py", "brain-console/tests/repo_parity.py"], "kind": "regression",
+             "how": "映射表是唯一权威，主源码出现未登记去向的文件即 EXIT 2；同步后逐字节回验",
+             "verified": "2026-08-17" },
+
+    "P11": { "guards": ["R-L0-*", "brain-console/tests/install_fill.py"], "kind": "gate",
+             "how": "L0 关闭（master_switch=false）或配置损坏时每轮打 systemMessage，静默失效不可能发生；模板替换全部记账",
+             "verified": "2026-08-17" },
+
+    "P23": { "guards": ["brain-console/tests/clone_smoke.py", "brain-console/tests/fresh_user_e2e.py", "brain-console/tests/cn_path_e2e.py"], "kind": "regression",
+             "how": "真 clone 一份从头走；再验没有作者目录的机器、中文+空格路径",
+             "verified": "2026-08-17" },
+
+    "P39": { "guards": ["brain-console/tests/run_all.py"], "kind": "regression",
+             "how": "开跑先 _kill_port() 动手清场，不只是贴提示——两次假红都发生在提示已经存在的情况下",
+             "verified": "2026-08-17" },
+
+    "P40": { "guards": ["brain-console/tests/soul_manifest.py"], "kind": "regression",
+             "how": "_MEI 目录按 mtime 取最新而不是按名字排序取第一个",
+             "verified": "2026-08-17" },
+
+    "P42": { "guards": ["brain-console/tests/pit_loss_alarm.py"], "kind": "regression",
+             "how": "只增不减的量守「不许低于历史最高」，涨了自动抬底线",
+             "verified": "2026-08-17" },
+
+    "R4":  { "guards": ["brain-console/tests/persist_after_restart.py"], "kind": "regression",
+             "how": "写入→重启进程→复查仍在。只验返回码不算",
+             "verified": "2026-08-17" },
+
+    "R6":  { "guards": ["R-L0-004"], "kind": "gate", "partial": true,
+             "how": "拦 git reset --hard / clean -f / push --force。⚠️ 只拦命令，**没验工作区有没有未提交改动**——坑 R6 的核心恰恰是那一半。缺口已登记在 loop 的缺闸清单里",
+             "verified": "2026-08-17" },
+
+    "R9":  { "guards": ["brain-console/tests/stress_b.py"], "kind": "regression",
+             "how": "并发用例覆盖 accept 队列打爆的场景",
+             "verified": "2026-08-17" },
+
+    "S9":  { "guards": ["brain-console/tests/auto_regen_stale.py"], "kind": "regression",
+             "how": "状态旧了扫描时自动重算，不靠人看见那个按钮",
+             "verified": "2026-08-17" },
+
+    "T1":  { "guards": ["project-delivery/hooks/gate.ps1"], "kind": "structural",
+             "how": "gate.ps1 / tally.ps1 / loop.ps1 全部纯 ASCII，中文一律从 config.json 按 UTF-8 读——命令行和脚本里根本不出现中文，这条坑在 L0 内部结构上不可能发生",
+             "verified": "2026-08-17" },
+
+    "T11": { "guards": ["brain-console/tests/run_all.py"], "kind": "regression",
+             "how": "退出码 3 单列「跳过」一档，汇总里点名「没验过，别当绿看」",
+             "verified": "2026-08-17" },
+
+    "T12": { "guards": ["brain-console/release_sync.py"], "kind": "regression",
+             "how": ".mirror_path 用 utf-8-sig 读，人手建的 BOM 不会拼进路径",
+             "verified": "2026-08-17" },
+
+    "T13": { "guards": ["brain-console/tests/hooks_gate_test.py"], "kind": "regression",
+             "how": "32 条判据里每条硬拦都配反向断言。本窗两个真 bug 都是被反向那条照出来的，正向全程绿着",
+             "verified": "2026-08-17" },
+
+    "T15": { "guards": ["brain-console/tests/atomic_write_test.py"], "kind": "regression",
+             "how": "写失败时原文件必须原样还在（open 'w' 会先截断）",
+             "verified": "2026-08-17" },
+
+    "T16": { "guards": ["brain-console/tests/regen_tool_broken.py"], "kind": "regression",
+             "how": "量具跑不了时拒写、退出码 3；正反两面各断言一次",
+             "verified": "2026-08-17" },
+
+    "T17": { "guards": ["brain-console/tests/regen_tool_broken.py", "brain-console/tests/destructive_probe.py"], "kind": "regression",
+             "how": "判据取直接证据（状态写下去了没有），不读退出码",
+             "verified": "2026-08-17" },
+
+    "W4":  { "guards": ["R-L0-001"], "kind": "gate",
+             "how": "W4 的失效判据原文是「写操作前的实证自检由工具强制（不靠 AI 自觉），未实证不允许执行」——R-L0-001 就是它。⚠️ 目前只强制「首行有证据头」这个**形状**，编一个照样过闸；离那条判据要求的『实证自检』还有距离，所以不算退休",
+             "verified": "2026-08-17" }
+  }
+}

@@ -23,6 +23,7 @@ L0 是「规则真的会拦人」这件事的唯一实现。它坏了的表现�
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -231,6 +232,144 @@ def main():
     s.check("配置坏了 -> 不拦（fail-open）", '"decision":"block"' not in out, out)
     s.check("配置坏了 -> 必须出声", "systemMessage" in out, out)
     s.check("配置坏了 -> 退出码仍是 0（不能挡住工具链）", code == 0, "exit=%s" % code)
+
+    # ---- 闭环：坑↔闸映射不许注水 -------------------------------------------
+    # 守护率是个能靠瞎填变高的数——填一条假映射，缺闸清单就少一行，
+    # 而那一行正是它该提醒你去建的东西。所以映射本身必须可证伪：
+    # 坑号得真在坑库里，引用的文件得真在磁盘上。
+    print("\n闭环映射（守护率能靠瞎填变高，这里让它不能）")
+    mp = os.path.join(SRC_HOOKS, "pit_gate_map.json")
+    s.check("pit_gate_map.json 在", os.path.isfile(mp), mp)
+    if os.path.isfile(mp):
+        with io.open(mp, encoding="utf-8") as f:
+            mdoc = json.load(f)
+        pit_md = os.path.join(SKILLS, "project-delivery", "坑库.md")
+        ids = set()
+        if os.path.isfile(pit_md):
+            with io.open(pit_md, encoding="utf-8") as f:
+                for ln in f:
+                    m = re.match(r"^\|\s*([A-Z]+[0-9]+)\s*\|", ln)
+                    if m:
+                        ids.add(m.group(1))
+        s.check("坑库解析出条目", len(ids) > 30, "只解析出 %d 条" % len(ids))
+
+        ghosts = [k for k in mdoc.get("map", {}) if k not in ids]
+        s.check("映射里没有不存在的坑号", not ghosts, "坑库里查无此条：%s" % ghosts)
+
+        missing = []
+        for pid, ent in mdoc.get("map", {}).items():
+            for g in ent.get("guards", []):
+                if g.startswith("R-L0-"):
+                    continue          # 规则 ID，不是文件
+                if not os.path.exists(os.path.join(SKILLS, g.replace("/", os.sep))):
+                    missing.append("%s -> %s" % (pid, g))
+        s.check("映射引用的守护文件都在", not missing, "找不到：%s" % missing[:4])
+
+        rules = set()
+        with io.open(os.path.join(SRC_HOOKS, "config.json"), encoding="utf-8") as f:
+            for g in json.load(f)["gates"].values():
+                rules.add(g["rule_id"])
+        badrule = []
+        for pid, ent in mdoc.get("map", {}).items():
+            for g in ent.get("guards", []):
+                if g.startswith("R-L0-") and not g.endswith("*") and g not in rules:
+                    badrule.append("%s -> %s" % (pid, g))
+        s.check("映射引用的闸门规则都存在", not badrule, "config 里没有：%s" % badrule)
+
+    # ---- loop.ps1 / tally.ps1 跑得起来 -------------------------------------
+    print("\n闭环工具")
+    if IS_WIN:
+        ps = shutil.which("powershell.exe") or shutil.which("powershell")
+        for tool, needle in (("loop.ps1", "guard rate"), ("tally.ps1", "rule ledger")):
+            r = subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                os.path.join(SRC_HOOKS, tool)],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            out = (r.stdout or b"").decode("utf-8", errors="replace")
+            s.check("%s 跑得通且出数" % tool, needle in out, out[-160:])
+    else:
+        print("  (非 Windows，跳过 ps1 工具检查)")
+
+    # ---- ASCII 不变式：ps1 里出现中文 = 上线即乱码 -------------------------
+    # 这条不是洁癖。PowerShell 5.1 把无 BOM 的 UTF-8 脚本按 ANSI 读，
+    # 脚本里的中文字面量会静默变成乱码；如果它出现在**判据**里
+    # （曾经写过 -match '^\s*多'），匹配永远为假，而表面上什么都没坏。
+    print("\nASCII 不变式（ps1 里写中文 = 判据静默失效）")
+    for fn in ("gate.ps1", "tally.ps1", "loop.ps1"):
+        p = os.path.join(SRC_HOOKS, fn)
+        bad = []
+        with io.open(p, encoding="utf-8") as f:
+            for i, ln in enumerate(f, 1):
+                if any(ord(c) > 126 for c in ln):
+                    bad.append(i)
+        s.check("%s 纯 ASCII" % fn, not bad, "非 ASCII 行：%s" % bad[:6])
+
+    # ---- 一键装：settings.json 是用户的文件，只许增不许吃 -------------------
+    # 手工粘配置对「陌生人第一次打开」这条判据等于不会发生，所以 L0 必须能一键装。
+    # 而一键装碰的是用户存着权限配置的那个文件——装错的代价比不装大得多。
+    print("\n一键装（--claude-dir 沙盒，真 settings.json 一个字节都不碰）")
+    inst = os.path.join(BC, "install.py")
+    if not os.path.isfile(inst):
+        s.check("install.py 在", False, inst)
+    else:
+        def run_install(d):
+            return subprocess.run(
+                [sys.executable, "-X", "utf8", inst, "--claude-dir", d,
+                 "--roots-file", os.path.join(d, "roots.json")],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            ).stdout.decode("utf-8", errors="replace")
+
+        # ① 全新机器
+        d1 = os.path.join(work, "cd_fresh")
+        os.makedirs(d1)
+        run_install(d1)
+        sp = os.path.join(d1, "settings.json")
+        conf = {}
+        if os.path.isfile(sp):
+            with io.open(sp, encoding="utf-8") as f:
+                conf = json.load(f)
+        evs = list(conf.get("hooks", {}).keys())
+        s.check("全新机器 -> 三个事件都挂上",
+                set(evs) >= {"SessionStart", "Stop", "PreToolUse"}, "实际：%s" % evs)
+
+        # ② 幂等：装两次不许变成两条
+        run_install(d1)
+        with io.open(sp, encoding="utf-8") as f:
+            conf2 = json.load(f)
+        s.check("装第二次 -> 幂等不重复", len(conf2["hooks"]["Stop"]) == 1,
+                "Stop 变成 %d 条" % len(conf2["hooks"]["Stop"]))
+
+        # ③ 用户已有配置必须原样活着（反向断言：不是「没报错」，是「东西还在」）
+        d2 = os.path.join(work, "cd_existing")
+        os.makedirs(d2)
+        with io.open(os.path.join(d2, "settings.json"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "permissions": {"defaultMode": "acceptEdits", "allow": ["Bash(git*)"]},
+                "theme": "dark",
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-own.sh"}]}]},
+            }, ensure_ascii=False, indent=2))
+        run_install(d2)
+        with io.open(os.path.join(d2, "settings.json"), encoding="utf-8") as f:
+            c3 = json.load(f)
+        s.check("已有 permissions 不被吃掉",
+                c3.get("permissions", {}).get("defaultMode") == "acceptEdits", str(c3.get("permissions")))
+        s.check("已有其它字段不被吃掉", c3.get("theme") == "dark", str(c3.get("theme")))
+        cmds = [h["command"] for g in c3["hooks"]["Stop"] for h in g["hooks"]]
+        s.check("用户自己的 hook 还在", "my-own.sh" in cmds, str(cmds))
+        s.check("L0 追加在后面而不是替换", len(cmds) == 2, str(cmds))
+        s.check("改之前留了备份", os.path.isfile(os.path.join(d2, "settings.json.before-l0")))
+
+        # ④ 语法坏掉的 settings.json：一个字节都不许动，而且要出声
+        d3 = os.path.join(work, "cd_broken")
+        os.makedirs(d3)
+        bp = os.path.join(d3, "settings.json")
+        broken = '{ "permissions": { broken'
+        with io.open(bp, "w", encoding="utf-8") as f:
+            f.write(broken)
+        out = run_install(d3)
+        with io.open(bp, encoding="utf-8") as f:
+            still = f.read()
+        s.check("坏 settings.json -> 一个字节都不动", still == broken, still[:60])
+        s.check("坏 settings.json -> 必须出声", "读不出来" in out, out[-160:])
 
     shutil.rmtree(work, ignore_errors=True)
 

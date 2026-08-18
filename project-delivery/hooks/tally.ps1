@@ -4,8 +4,9 @@
 # Rule text comes from config.json; counts come from traces/*.jsonl.
 #
 # Why this exists:
-#   scaffold/规则台账.md has two columns -- "触发过几次" and "哪条真的拦住过一次事故".
-#   Those are the columns its own delete-criterion depends on ("never triggered").
+#   The rule ledger template has two columns -- "how many times did it fire" and
+#   "which rule actually prevented an incident". Those are the columns its own
+#   delete-criterion depends on ("never triggered").
 #   A hand-maintained count rots the moment someone forgets to update it, and a
 #   rotten count is worse than none: it reads as evidence.
 #   So the ledger is not a document you edit. It is this command's output.

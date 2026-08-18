@@ -100,7 +100,7 @@ function Hash-Text($t) {
 
 # Read stdin as raw bytes and decode as UTF-8 explicitly.
 #
-# ⛔ Do NOT use [Console]::In.ReadToEnd(). It decodes with [Console]::InputEncoding,
+# !! Do NOT use [Console]::In.ReadToEnd(). It decodes with [Console]::InputEncoding,
 #    which on Windows defaults to the ANSI codepage (936/GBK here), not UTF-8.
 #    Claude Code sends UTF-8. The failure mode is nasty and one-sided: ASCII
 #    payloads pass fine, so a smoke test looks green -- but the evidence header
@@ -155,11 +155,34 @@ if ($evtName -eq 'SessionStart') {
     # Chinese file names come from config.json -- this script cannot spell them.
     $mapPath  = Join-Path $skills (([string]$script:Cfg.paths.map)  -replace '/', '\')
     $corePath = Join-Path $skills (([string]$script:Cfg.paths.core) -replace '/', '\')
+
+    # Guard rate, computed cheaply: count pit rows, count mapped ids. No sorting,
+    # no trace scan -- SessionStart has a 20s budget and this runs on every window.
+    # The full analysis lives in loop.ps1; here we only surface the one number, so
+    # that "how much is actually defended" is impossible to not see.
+    $pitCount = 0; $coveredCount = 0; $rate = 0
+    try {
+        $pitPath = Join-Path $skills (([string]$script:Cfg.paths.pits) -replace '/', '\')
+        if (Test-Path $pitPath) {
+            $pitCount = @(Select-String -Path $pitPath -Pattern '^\|\s*[A-Z]+[0-9]+\s*\|' -Encoding UTF8).Count
+        }
+        $mapFile = Join-Path $HookDir 'pit_gate_map.json'
+        if (Test-Path $mapFile) {
+            $md = Get-Content -Raw -Encoding UTF8 -Path $mapFile | ConvertFrom-Json
+            $coveredCount = @($md.map.PSObject.Properties).Count
+        }
+        if ($pitCount -gt 0) { $rate = [math]::Round(100.0 * $coveredCount / $pitCount, 1) }
+    } catch { }
+
     $text = Fill $g.inject @{
-        map    = $mapPath
-        core   = $corePath
-        readme = (Join-Path $HookDir 'README.md')
-        active = ($active -join ' | ')
+        map     = $mapPath
+        core    = $corePath
+        readme  = (Join-Path $HookDir 'README.md')
+        active  = ($active -join ' | ')
+        rate    = $rate
+        pits    = $pitCount
+        covered = $coveredCount
+        loop    = (Join-Path $HookDir 'loop.ps1')
     }
     # This gate never blocks, so it can never produce a block/deny row. Without
     # its own record it shows up in the ledger as "never fired" -- which is the
@@ -304,7 +327,7 @@ if ($evtName -eq 'PreToolUse') {
                         exit 0
                     }
 
-                    # ⛔ $ErrorActionPreference='Stop' turns a native command's stderr
+                    # !! $ErrorActionPreference='Stop' turns a native command's stderr
                     #    into a terminating error in PowerShell 5.1. git writes to
                     #    stderr whenever the path is not a repo -- i.e. exactly the
                     #    case this gate exists to catch. Left as-is, the gate reported
