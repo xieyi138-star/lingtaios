@@ -318,14 +318,39 @@ def main():
         ghosts = [k for k in mdoc.get("map", {}) if k not in ids]
         s.check("映射里没有不存在的坑号", not ghosts, "坑库里查无此条：%s" % ghosts)
 
+        # 主源码布局的判据和 soul_manifest / install.py / spec 同源
+        FLAT = not os.path.isdir(os.path.join(SKILLS, "brain-console"))
+
+        def guard_exists(rel):
+            """两种布局都要认：
+              主源码  skills\\brain-console\\  → 路径是 brain-console/tests/x.py
+              发布仓  repo\\                   → 发布时摊平，同一件在 tests/x.py
+            ⛔ 只认第一种的话，从公开仓 clone 下来跑，这条断言会把**存在的**文件
+               报成缺失——正是坑库 P23 的形状。实测：发布仓布局下当场红。
+
+            `internal:` 前缀 = 这个守护者不随包分发（如 release_sync.py 在
+            NOT_SHIPPED 上）。发布仓里它本来就不该在，跳过存在检查。
+            ⛔ 跳过的只是**检查**，不是事实：那条坑在用户手上确实没人守，
+               守护率对他是虚高的。这一点写在 pit_gate_map 的说明里，别忘了。
+            """
+            if rel.startswith("internal:"):
+                if FLAT:
+                    return True
+                rel = rel[len("internal:"):]
+            cands = [rel]
+            if rel.startswith("brain-console/"):
+                cands.append(rel[len("brain-console/"):])
+            return any(os.path.exists(os.path.join(SKILLS, c.replace("/", os.sep)))
+                       for c in cands)
+
         missing = []
         for pid, ent in mdoc.get("map", {}).items():
             for g in ent.get("guards", []):
                 if g.startswith("R-L0-"):
                     continue          # 规则 ID，不是文件
-                if not os.path.exists(os.path.join(SKILLS, g.replace("/", os.sep))):
+                if not guard_exists(g):
                     missing.append("%s -> %s" % (pid, g))
-        s.check("映射引用的守护文件都在", not missing, "找不到：%s" % missing[:4])
+        s.check("映射引用的守护文件都在（两种布局）", not missing, "找不到：%s" % missing[:4])
 
         rules = set()
         with io.open(os.path.join(SRC_HOOKS, "config.json"), encoding="utf-8") as f:
@@ -342,12 +367,17 @@ def main():
     print("\n闭环工具")
     if IS_WIN:
         ps = shutil.which("powershell.exe") or shutil.which("powershell")
-        for tool, needle in (("loop.ps1", "guard rate"), ("tally.ps1", "rule ledger")):
+        # tally 在**还没有任何 traces** 时不打表头，而是提示「一条流水都没有，
+        # 先确认闸门接上了」——那是正确行为，不是失败。发布仓里 traces/ 不同步
+        # （SKIP_NAMES），所以从 clone 出来跑必然走这一支。只认表头那个词的话，
+        # 这条断言在别人机器上必红，而产品完全正常。
+        for tool, needles in (("loop.ps1", ["guard rate"]),
+                              ("tally.ps1", ["rule ledger", "no traces yet"])):
             r = subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                 os.path.join(SRC_HOOKS, tool)],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             out = (r.stdout or b"").decode("utf-8", errors="replace")
-            s.check("%s 跑得通且出数" % tool, needle in out, out[-160:])
+            s.check("%s 跑得通且出数" % tool, any(n in out for n in needles), out[-160:])
     else:
         print("  (非 Windows，跳过 ps1 工具检查)")
 

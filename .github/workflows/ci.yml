@@ -1,0 +1,94 @@
+# 灵台 OS · CI
+#
+# 存在的唯一理由：**作者只有一台 Windows。**
+#
+# 产品第一判据是「陌生人第一次打开会不会卡住」，而最容易卡住的地方——路径分隔符、
+# 大小写敏感、shebang 行尾符、bash/coreutils 的行为差异——恰恰是本机永远复现不了的。
+# 坑库 P23 说的就是这件事：在开发目录里验可移植性，全绿也证明不了别人能用。
+#
+# 具体到 L0：gate.sh 是给 mac/Linux 用户跑的，而它至今只在 Windows 的 Git Bash 下
+# 验过。Git Bash 不是 Linux——用的是 Windows 的 python 和路径语义。
+# 这一格在作者机器上关不掉（无 WSL 发行版、无 Docker），只能由这里合上。
+#
+# ⛔ 三个平台都跑，且 fail-fast: false —— 要的就是「哪个平台挂了」这个信息。
+#    一个平台红就掐掉其余的，等于把最想知道的事情藏起来。
+
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: L0 + 装机 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 语法先过。语法错在别的平台上表现成千奇百怪的运行时错误，先排掉。
+      - name: 语法编译
+        shell: bash
+        run: |
+          python -m compileall -q . -x '(^|/)(build|dist|__pycache__)/' || exit 1
+
+      # gate.sh 的 shebang 和行尾符：CRLF 会让它在 Linux 上报 bad interpreter，
+      # 而那条错误信息里没有「行尾符」四个字。.gitattributes 守着，这里验它真守住了。
+      - name: gate.sh 语法与行尾
+        if: runner.os != 'Windows'
+        run: |
+          head -c 2 project-delivery/hooks/gate.sh | grep -q '#!' || { echo "shebang 丢了"; exit 1; }
+          if head -1 project-delivery/hooks/gate.sh | grep -q $'\r'; then
+            echo "gate.sh 是 CRLF —— 在 Linux 上会 bad interpreter"; exit 1
+          fi
+          bash -n project-delivery/hooks/gate.sh
+
+      # 主菜：L0 全套判据。
+      # ⛔ 在非 Windows 上它会自动走 gate.sh 分支——这正是 gate.sh 唯一的真验证。
+      - name: L0 闸门回归
+        shell: bash
+        run: python -X utf8 tests/hooks_gate_test.py
+
+      # 换电脑第一条命令。⛔ --claude-dir 指向临时目录，不碰 runner 的家目录。
+      # 这条同时验了 L0 一键装：install 自检里含挂载检查，没挂上就是红。
+      - name: 装机（含 L0 挂载自检）
+        shell: bash
+        run: |
+          d="$(mktemp -d)"
+          python -X utf8 install.py --claude-dir "$d" --roots-file "$d/roots.json"
+
+      # 挂载的三个入口必须产出同一份配置。这条在 hooks_gate_test 里也有，
+      # 但那是 Windows 上验过的；跨平台时 os.name 分支会走另一条路。
+      - name: 挂载入口一致性
+        shell: bash
+        run: |
+          a="$(mktemp -d)"; b="$(mktemp -d)"
+          python -X utf8 project-delivery/hooks/mount.py --claude-dir "$a"
+          python -X utf8 dashboard.py --install-hooks --claude-dir "$b"
+          python - "$a" "$b" <<'PY'
+          import json, sys
+          def norm(p):
+              with open(p + "/settings.json", encoding="utf-8") as f:
+                  return json.dumps(json.load(f), sort_keys=True)
+          if norm(sys.argv[1]) != norm(sys.argv[2]):
+              print("mount.py 和 dashboard --install-hooks 产出不一致"); sys.exit(1)
+          print("两个入口产出一致")
+          PY
+
+      # 闭环工具在这台机器上跑不跑得动（Windows 才有 ps1）
+      - name: 闭环工具
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File project-delivery/hooks/loop.ps1
+          pwsh -NoProfile -File project-delivery/hooks/tally.ps1

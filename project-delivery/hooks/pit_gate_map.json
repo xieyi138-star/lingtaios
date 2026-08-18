@@ -19,12 +19,14 @@
 
   "_guards 字段的写法": "文件路径一律**相对 skills 根**（如 brain-console/tests/x.py）；规则 ID 以 R-L0- 开头（如 R-L0-001，通配写 R-L0-*）。两种混着写过一版，校验断言当场分不清哪个该查文件存在——统一后 hooks_gate_test.py 会逐条验：map 里的坑号必须真在坑库里，引用的文件必须真在磁盘上。**守护率能靠瞎填变高，这两条断言让它不能。**",
 
+  "_internal: 前缀": "标记「这个守护者只在作者仓里，不随包分发」（如 release_sync.py 在 NOT_SHIPPED 名单上）。加这个前缀不是为了让断言闭嘴——恰恰相反：**从用户视角，被 internal 守护者「守着」的坑，在他手上其实没人守**，守护率对他是虚高的。标出来，才知道那个数字对谁成立。发布仓布局下断言会跳过这类文件的存在检查（它本来就不该在那儿），loop.ps1 则把它显示成 internal。同装配图里「仅源码态」的先例。",
+
   "map": {
     "P1":  { "guards": ["brain-console/tests/hooks_gate_test.py", "brain-console/tests/soul_manifest.py"], "kind": "regression",
              "how": "每条硬拦都配反向断言；量具自身喂坏样本必须报红。本窗兑现过一次：改 config 一个字 → 5 条红",
              "verified": "2026-08-17" },
 
-    "P10": { "guards": ["brain-console/release_sync.py", "brain-console/tests/repo_parity.py"], "kind": "regression",
+    "P10": { "guards": ["internal:brain-console/release_sync.py", "brain-console/tests/repo_parity.py"], "kind": "regression",
              "how": "映射表是唯一权威，主源码出现未登记去向的文件即 EXIT 2；同步后逐字节回验",
              "verified": "2026-08-17" },
 
@@ -76,7 +78,7 @@
              "how": "退出码 3 单列「跳过」一档，汇总里点名「没验过，别当绿看」",
              "verified": "2026-08-17" },
 
-    "T12": { "guards": ["brain-console/release_sync.py"], "kind": "regression",
+    "T12": { "guards": ["internal:brain-console/release_sync.py"], "kind": "regression",
              "how": ".mirror_path 用 utf-8-sig 读，人手建的 BOM 不会拼进路径",
              "verified": "2026-08-17" },
 

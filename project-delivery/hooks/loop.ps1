@@ -59,6 +59,17 @@ foreach ($line in (Get-Content -Encoding UTF8 -Path $pitPath)) {
     if ($cells.Count -lt 7) { continue }
     $id = $cells[1].Trim()
     $hitRaw = $cells[5].Trim()
+    # Column 7 is the date the entry was filed. Entries filed on or before
+    # 2026-08-16 carry retire-criteria the AI derived, not the founder's words --
+    # the library says so itself. Those criteria are exactly what the gap list
+    # hands you as a "spec", so a shaky one has to be visible BEFORE you build
+    # against it. The cutoff is read from the date column rather than a written
+    # count: the original note said "these 38", and 38 stopped meaning anything
+    # two days later when the library grew (that is pit S10, committed inside the
+    # file that records S10).
+    $filed = ''
+    if ($cells.Count -ge 8) { $filed = $cells[7].Trim() }
+    $unreviewed = ($filed -ne '' -and $filed -le '2026-08-16')
     # The hits column is either a number, a number with a CJK parenthetical, the
     # single char U+591A meaning "many", or U+2014 (em dash) meaning "not counted".
     # !! U+591A is written as an escape, not as a literal: this file must stay
@@ -72,12 +83,13 @@ foreach ($line in (Get-Content -Encoding UTF8 -Path $pitPath)) {
     if ($hitRaw -match '^\s*(\d+)') { $hits = [int]$matches[1] }
     elseif ($hitRaw.StartsWith($MANY)) { $hits = 9 }
     $pits += [pscustomobject]@{
-        id      = $id
-        section = $section
-        pit     = $cells[2].Trim()
-        hits    = $hits
-        hitRaw  = $hitRaw
-        retire  = $cells[6].Trim()
+        id         = $id
+        section    = $section
+        pit        = $cells[2].Trim()
+        hits       = $hits
+        hitRaw     = $hitRaw
+        retire     = $cells[6].Trim()
+        unreviewed = $unreviewed
     }
 }
 
@@ -150,7 +162,9 @@ foreach ($g in $show) {
     if ($g.hits -ge 2) { $mark = ('  [bit ' + $g.hits + ' times]') }
     Write-Output ("  {0,-5} {1}{2}" -f $g.id, $g.pit.Substring(0, [Math]::Min(76, $g.pit.Length)), $mark)
     if ($g.retire) {
-        Write-Output ("        spec: {0}" -f $g.retire.Substring(0, [Math]::Min(84, $g.retire.Length)))
+        $tag = ''
+        if ($g.unreviewed) { $tag = '  [criterion UNREVIEWED - check it before building to it]' }
+        Write-Output ("        spec: {0}{1}" -f $g.retire.Substring(0, [Math]::Min(84, $g.retire.Length)), $tag)
     }
     Write-Output ''
 }
@@ -161,6 +175,15 @@ if (-not $All -and $gaps.Count -gt $Top) {
 Write-Output '  The "spec:" line is that pit''s own retire-when clause, verbatim. It already'
 Write-Output '  describes the gate that would make the pit impossible -- it is a specification,'
 Write-Output '  not a wish. Building it is how a pit retires; deleting the row is not.'
+$unrev = @($pits | Where-Object { $_.unreviewed }).Count
+if ($unrev -gt 0) {
+    Write-Output ''
+    Write-Output ("  [!] {0} of {1} criteria are marked UNREVIEWED (filed on or before 2026-08-16)." -f $unrev, $pits.Count)
+    Write-Output '      Those were derived by an AI from the pit''s cause, not written by the author.'
+    Write-Output '      Do NOT batch-approve them. Review one only when you are about to act on it --'
+    Write-Output '      either building a gate to that spec, or retiring that pit. Batch review while'
+    Write-Output '      tired is worse than no review: it converts "unsure" into "approved" in one pass.'
+}
 Write-Output ''
 
 # ---- 3. what is covered ------------------------------------------------------
@@ -172,7 +195,13 @@ if ($Guarded) {
         $partial = ''
         if ($m.partial) { $partial = '   [PARTIAL]' }
         Write-Output ("  {0,-5} {1}{2}" -f $g.id, $g.pit.Substring(0, [Math]::Min(70, $g.pit.Length)), $partial)
-        Write-Output ("        by:  {0}  ({1})" -f (($m.guards) -join ', '), [string]$m.kind)
+        # `internal:` = that guard lives only in the author's repo and is not
+        # shipped. For someone holding a release, that pit has NO guard at all --
+        # show it, so the guard rate does not read stronger than it is.
+        $gs = @($m.guards | ForEach-Object {
+            if ([string]$_ -like 'internal:*') { ([string]$_).Substring(9) + ' (internal)' } else { [string]$_ }
+        })
+        Write-Output ("        by:  {0}  ({1})" -f ($gs -join ', '), [string]$m.kind)
         if ($m.how) { Write-Output ("        how: {0}" -f ([string]$m.how).Substring(0, [Math]::Min(84, ([string]$m.how).Length))) }
         Write-Output ''
     }
