@@ -1,7 +1,11 @@
 {
+  "_先看这句": "⚠️ 一般不用手工粘。跑 `python -X utf8 install.py`（或 `lingtaios.exe --install-hooks`）会自动挂好，且只增不覆盖你已有的配置。这份样板是给「想自己控制、或换机器改路径」的人看的。",
+
   "_readme": "把下面 hooks 这一段粘进你的 ~/.claude/settings.json 顶层（与 permissions 平级）。这是样板，不是活配置——活的那份在每台机器自己的 settings.json 里。",
 
-  "_换机器要改什么": "只有 args 里那条绝对路径。改成你自己的 <skills根>/project-delivery/hooks/gate.ps1。hook 的 command 字段不做环境变量展开，${CLAUDE_PROJECT_DIR} 又指向当前项目而不是 skills 仓，所以这里只能写绝对路径。这也是为什么判据逻辑一个字都不放在 settings.json 里——它是本机配置，没有版本，换台机器就没了。",
+  "_要改什么": "把三处 <SKILLS_ROOT> 换成你机器上 project-delivery 的父目录绝对路径（例如 <你的用户目录>/.claude/skills）。hook 的 command 字段不做环境变量展开，${CLAUDE_PROJECT_DIR} 又指向当前项目而不是 skills 仓，所以这里只能是绝对路径。这也是为什么判据逻辑一个字都不放在 settings.json 里——它是本机配置，没有版本，换台机器就没了。",
+
+  "_为什么用占位符而不是示例路径": "⛔ 这份文件随公开仓分发。此前它写的是作者机器上的真实路径 `C:\\Users\\<作者用户名>\\...`，一路同步进了公开仓——既违反「任何代码/文档里不许写死用户路径」这条红线，也对读者毫无意义。差点带着它 push 出去，是 push 前的红线检查拦下的；而那次检查**第一遍还漏了**（grep 模式按单反斜杠写，JSON 里是转义后的双反斜杠，报了 0 条）。现在 `brand_check.py` 守这条，且带反向断言。",
 
   "_macOS_Linux": "把 command 换成 \"bash\"、args 换成 [\"<skills根>/project-delivery/hooks/gate.sh\"]。判据两边共用同一份 config.json，不会分叉。",
 
@@ -19,7 +23,7 @@
             "args": [
               "-NoProfile",
               "-ExecutionPolicy", "Bypass",
-              "-File", "C:\\Users\\Administrator\\.claude\\skills\\project-delivery\\hooks\\gate.ps1"
+              "-File", "<SKILLS_ROOT>\\project-delivery\\hooks\\gate.ps1"
             ],
             "timeout": 20,
             "statusMessage": "L0 开窗注入"
@@ -36,7 +40,7 @@
             "args": [
               "-NoProfile",
               "-ExecutionPolicy", "Bypass",
-              "-File", "C:\\Users\\Administrator\\.claude\\skills\\project-delivery\\hooks\\gate.ps1"
+              "-File", "<SKILLS_ROOT>\\project-delivery\\hooks\\gate.ps1"
             ],
             "timeout": 20,
             "statusMessage": "L0 证据头闸"
@@ -54,7 +58,7 @@
             "args": [
               "-NoProfile",
               "-ExecutionPolicy", "Bypass",
-              "-File", "C:\\Users\\Administrator\\.claude\\skills\\project-delivery\\hooks\\gate.ps1"
+              "-File", "<SKILLS_ROOT>\\project-delivery\\hooks\\gate.ps1"
             ],
             "timeout": 20,
             "statusMessage": "L0 回滚点闸"
