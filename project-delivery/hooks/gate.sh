@@ -456,6 +456,33 @@ if [ "$EVT" = "pre_tool" ]; then
     fi
   fi
 
+  # ---- R-L0-007 python without -X utf8 (pit T2, bitten twice) ---------------
+  if gate_on encoding; then
+    MATCH=0
+    while IFS= read -r t; do [ "$t" = "$TOOL" ] && MATCH=1; done <<< "$(qa "$CFGTXT" '.gates.encoding.match_tools')"
+    [ -z "$TOOL" ] && [ -n "$(nf command)" ] && MATCH=1
+    if [ $MATCH -eq 1 ]; then
+      CMD7="$(nf command)"
+      if [ -n "$CMD7" ]; then
+        SP="$(q "$CFGTXT" '.gates.encoding.script_pattern')"
+        EP="$(q "$CFGTXT" '.gates.encoding.exempt_pattern')"
+        # !! `--` is required: exempt_pattern starts with `-X`, and without the
+        #    terminator grep parses it as an OPTION, not a pattern. The gate then
+        #    never sees the exemption and blocks `python -X utf8 script.py` --
+        #    i.e. it blocks the very command it is telling you to use.
+        #    The ps1 side uses .NET Regex and has no such hazard; this is exactly
+        #    the kind of divergence having two implementations costs you, and
+        #    exactly why the reverse assertion ("exempt -> pass") had to exist.
+        if printf '%s' "$CMD7" | grep -qiE -- "$SP" && ! printf '%s' "$CMD7" | grep -qiE -- "$EP"; then
+          RID7="$(q "$CFGTXT" '.gates.encoding.rule_id')"
+          trace "{\"rule\":$(json_escape "$RID7"),\"gate\":\"encoding\",\"action\":\"deny\",\"session\":$(json_escape "$SID"),\"tool\":$(json_escape "$TOOL"),\"command\":$(json_escape "$CMD7"),\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+          emit_decision deny_tool "$(fill "$(q "$CFGTXT" '.gates.encoding.block_reason')" command "$CMD7")"
+          exit 0
+        fi
+      fi
+    fi
+  fi
+
   # ---- R-L0-004 irreversible commands ---------------------------------------
   if gate_on danger; then
     MATCH=0

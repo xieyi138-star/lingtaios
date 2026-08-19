@@ -128,6 +128,24 @@
       "_second_try_passes": "同一 session 内同一条命令第二次出现时放行：第一次拦下是为了让人先说出回滚路径，不是为了禁止这类操作。⛔ 放行也记账，traces 里看得到「拦了但被确认执行」。"
     },
 
+    "encoding": {
+      "enabled": true,
+      "rule_id": "R-L0-007",
+      "event": "PreToolUse",
+      "match_tools": ["Bash", "PowerShell"],
+      "_blocks": "用 python 跑脚本却没带 -X utf8",
+      "_prevents": "坑库 T2（已触发 2 次，同族）：① UTF-8 BOM 破坏 ^ 锚定正则，计数静默少算 ② CI 的 windows runner 上 stdout 默认 cp1252，脚本里 print 一个中文就 UnicodeEncodeError。两次的共同点是**默认编码在不同机器上不一样**，而代码在作者机器上永远是对的。",
+      "_retire_when": "所有 python 入口都由封装启动（封装内固定 -X utf8），命令行里不再直接出现 python <脚本>。",
+
+      "_为什么硬拦而不是提醒": "修复动作只有一步——加四个字符。而漏掉的代价是「在别人机器上才炸」，那类错误查起来极贵：本机复现不了，报错信息也不提编码。一步能改的事，值得拦。",
+      "_不拦什么": "python -c / -m 这类不跑脚本文件的；已经带了 -X utf8 或 PYTHONUTF8 的；以及非 python 命令。",
+
+      "script_pattern": "(^|[\\s;|&])(python|python3|py)(\\.exe)?\\s+[^|;&]*\\.py(\\s|$|\")",
+      "exempt_pattern": "-X\\s*utf8|PYTHONUTF8|PYTHONIOENCODING",
+
+      "block_reason": "【L0 闸门 R-L0-007】用 python 跑脚本没带 -X utf8：\n  {command}\n\n改成 `python -X utf8 <脚本>` 再发一次。\n\n坑库 T2 已经因此被咬过两次，两次都是**在别人的机器上才炸**：\n  · UTF-8 BOM 让 ^ 锚定的正则静默少算\n  · CI 的 windows runner 上 stdout 默认 cp1252，print 一个中文就 UnicodeEncodeError\n\n本机默认编码碰巧对，所以这类错在这里永远复现不了，报错信息里也不会提「编码」两个字。\n加四个字符就能免掉——这是为数不多「一步修复、代价极不对称」的事。"
+    },
+
     "session_start": {
       "enabled": true,
       "rule_id": "R-L0-005",

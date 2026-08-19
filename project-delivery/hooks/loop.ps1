@@ -26,6 +26,7 @@
 param(
     [switch]$All,
     [switch]$Guarded,
+    [switch]$Excluded,
     [int]$Top = 12
 )
 
@@ -113,16 +114,41 @@ if (Test-Path $traceDir) {
     }
 }
 
-# !! Not $guarded: PowerShell variable names are case-insensitive, so it would
-#    collide with the [switch]$Guarded parameter and fail with a type error.
+# Pits explicitly ruled out as gate material, with a reason each.
+# !! They come OUT of the denominator. The denominator has to be "pits a gate
+#    could plausibly catch", not "all pits" -- otherwise the rate can never
+#    reach 100% and stops meaning anything, and worse, the top of the gap list
+#    fills up with things no gate can do (P17 wants a human planning checkpoint,
+#    P4 wants a test-set construction rule). Building gates for those yields
+#    false positives, and the first thing anyone does with a gate that cries
+#    wolf is switch it off -- taking the working ones with it.
+$notGateable = @{}
+if ($mapDoc.not_gateable) {
+    foreach ($p in $mapDoc.not_gateable.PSObject.Properties) {
+        if ($p.Name -notlike '_*' -and $p.Name -ne 'kinds') { $notGateable[$p.Name] = $p.Value }
+    }
+}
+
+# !! $covered / $ruledOut, NOT $guarded / $excluded: PowerShell variable names
+#    are case-insensitive, so a local named $excluded silently IS the
+#    [switch]$Excluded parameter, and assigning an array to it fails with a
+#    type error pointing at the wrong line. Hit this twice in this file --
+#    once for $guarded, then again for $excluded after the first fix.
+#    Same shape twice is a rule, not an accident: never name a local after a param.
 $covered = @($pits | Where-Object { $mapped.ContainsKey($_.id) })
-$gaps = @($pits | Where-Object { -not $mapped.ContainsKey($_.id) } | Sort-Object -Property @{Expression = 'hits'; Descending = $true}, 'id')
+$ruledOut = @($pits | Where-Object { $notGateable.ContainsKey($_.id) })
+$gaps = @($pits | Where-Object { -not $mapped.ContainsKey($_.id) -and -not $notGateable.ContainsKey($_.id) } |
+          Sort-Object -Property @{Expression = 'hits'; Descending = $true}, 'id')
+$denom = $pits.Count - $ruledOut.Count
 $rate = 0
-if ($pits.Count -gt 0) { $rate = [math]::Round(100.0 * $covered.Count / $pits.Count, 1) }
+if ($denom -gt 0) { $rate = [math]::Round(100.0 * $covered.Count / $denom, 1) }
 
 Write-Output ''
 Write-Output ('=' * 96)
-Write-Output ("L0 self-reinforcement loop   --   guard rate {0}%  ({1} of {2} pits have something watching them)" -f $rate, $covered.Count, $pits.Count)
+Write-Output ("L0 self-reinforcement loop   --   guard rate {0}%  ({1} of {2} gateable pits are guarded)" -f $rate, $covered.Count, $denom)
+if ($ruledOut.Count -gt 0) {
+    Write-Output ("   {0} of {1} pits are ruled out as gate material (run -Excluded to see why)." -f $ruledOut.Count, $pits.Count)
+}
 Write-Output ('=' * 96)
 Write-Output 'This number is the only one that grows with use. It is what "the method gets more'
 Write-Output 'accurate the more it is used" looks like when you can actually measure it.'
@@ -208,6 +234,22 @@ if ($Guarded) {
 }
 
 # ---- next action -------------------------------------------------------------
+if ($Excluded) {
+    Write-Output '--- [4] pits ruled OUT as gate material ---------------------------------------'
+    Write-Output ''
+    foreach ($g in ($ruledOut | Sort-Object id)) {
+        $e = $notGateable[$g.id]
+        Write-Output ("  {0,-5} {1}" -f $g.id, $g.pit.Substring(0, [Math]::Min(70, $g.pit.Length)))
+        Write-Output ("        kind: {0}   ->  handled by: {1}" -f [string]$e.kind, [string]$e.by)
+        Write-Output ("        why : {0}" -f ([string]$e.why).Substring(0, [Math]::Min(88, ([string]$e.why).Length)))
+        Write-Output ''
+    }
+    Write-Output '  Ruled out means "not L0''s job", NOT "nobody has to deal with it".'
+    Write-Output '  The `handled by` line has to name someone. If it cannot, the entry does not'
+    Write-Output '  belong here -- that would be using a category to hide the fact that nobody owns it.'
+    Write-Output ''
+}
+
 Write-Output ('=' * 96)
 $top1 = $gaps | Select-Object -First 1
 if ($top1) {

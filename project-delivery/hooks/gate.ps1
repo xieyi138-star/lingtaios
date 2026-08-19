@@ -550,6 +550,28 @@ if ($evt -eq 'pre_tool') {
         }
     }
 
+    # ---- R-L0-007 python without -X utf8 (pit T2, bitten twice) -------------
+    if (Gate-On 'encoding') {
+        $g7 = $script:Cfg.gates.encoding
+        if (($g7.match_tools -contains $tool) -or (-not $tool -and $N['command'])) {
+            $cmd7 = [string]$N['command']
+            if ($cmd7) {
+                $isScript = [Text.RegularExpressions.Regex]::IsMatch(
+                    $cmd7, [string]$g7.script_pattern,
+                    [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                $exempt = [Text.RegularExpressions.Regex]::IsMatch(
+                    $cmd7, [string]$g7.exempt_pattern,
+                    [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                if ($isScript -and -not $exempt) {
+                    Write-Trace @{ rule = [string]$g7.rule_id; gate = 'encoding'; action = 'deny'
+                                   session = $sid; tool = $tool; command = $cmd7 }
+                    Emit-Decision 'deny_tool' (Fill $g7.block_reason @{ command = $cmd7 })
+                    exit 0
+                }
+            }
+        }
+    }
+
     # ---- R-L0-004 irreversible commands -------------------------------------
     if (Gate-On 'danger') {
         $g4 = $script:Cfg.gates.danger

@@ -243,6 +243,36 @@ def main():
     s.check("transcript 读不到 -> 不拦（判不出不等于有罪）", "decision" not in out, out[:120])
     s.check("transcript 读不到 -> 必须出声", "systemMessage" in out, out[:120])
 
+    # ---- R-L0-007 python 不带 -X utf8（坑库 T2，已咬两次）-------------------
+    # T2 两次都是**在别人的机器上才炸**：BOM 破 ^ 锚定正则、CI 的 windows runner
+    # stdout 默认 cp1252。本机默认编码碰巧对，所以这类错在这儿永远复现不了。
+    # 判据窄而明确，误报面小——但正因为窄，反向断言更重要：拦过头会把
+    # python -c / -m / 已豁免的一起拦掉，那就成了每天挡路的闸。
+    print("\nR-L0-007 python 不带 -X utf8（坑库 T2）")
+    _py = "py" + "thon"      # 拼出来：这个文件自己也会被这条闸扫到
+
+    def bash_cmd(sid, cmd):
+        return call(argv, {"hook_event_name": "PreToolUse", "session_id": sid,
+                           "tool_name": "Bash", "tool_input": {"command": cmd}})[0]
+
+    out = bash_cmd("e1", "%s tests/x.py" % _py)
+    s.check("跑脚本没带 -X utf8 -> 拦", "R-L0-007" in out, out[:100])
+
+    out = bash_cmd("e2", "%s -X utf8 tests/x.py" % _py)
+    s.check("带了 -X utf8 -> 放行（反向）", out == "", out[:100])
+
+    out = bash_cmd("e3", '%s -c "print(1)"' % _py)
+    s.check("-c 不跑脚本文件 -> 放行（反向）", out == "", out[:100])
+
+    out = bash_cmd("e4", "%s -m pytest" % _py)
+    s.check("-m 模块 -> 放行（反向）", out == "", out[:100])
+
+    out = bash_cmd("e5", "PYTHONUTF8=1 %s x.py" % _py)
+    s.check("环境变量已豁免 -> 放行（反向）", out == "", out[:100])
+
+    out = bash_cmd("e6", "node x.js")
+    s.check("非 python 命令 -> 不进这条闸（反向）", out == "", out[:100])
+
     # ---- R-L0-005 开窗注入 --------------------------------------------------
     print("\nR-L0-005 开窗注入")
     out, _ = call(argv, {"hook_event_name": "SessionStart", "session_id": "t14",
