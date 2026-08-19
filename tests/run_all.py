@@ -34,6 +34,7 @@ PY = sys.executable
 SUITE = [
     "no_local_path.py",          # 要发出去的文件里不许出现本机用户名（红线一直只是一句话，没东西守）
     "hooks_gate_test.py",        # L0 强制层：闸门坏了的两种样子都不吭声（全放行=等于没装／全拦截=用户当场卸掉）
+    "l0_stress.py",              # L0 压测：判据全绿时它照样在攒磁盘、在拖慢每一次回复
     "repo_parity.py",            # 两仓一致性：不动服务，先跑掉
     "clone_smoke.py",            # 坑库 P23 的执行者：真 clone 一份从头走（验的是发布仓 HEAD）
     "persist_after_restart.py",  # 坑库 R4 的执行者：写入→重启进程→复查仍在

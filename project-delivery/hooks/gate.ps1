@@ -59,6 +59,45 @@ function Write-Trace($record) {
     }
 }
 
+function Prune-Traces {
+    # Housekeeping. Runs on SessionStart only -- once per new window, which is
+    # rare enough to cost nothing, and often enough that nothing piles up.
+    # !! retain_days used to live in config.json with NOTHING reading it. A
+    #    config key that does nothing is worse than no key: it reads as
+    #    "someone is managing this". The stress test is what found it.
+    #    .state is the dangerous one: one file per session, append-only forever,
+    #    in a directory nobody would ever think to look at (pit R8).
+    try {
+        if (-not $script:Cfg.traces.enabled) { return }
+        $dir = Join-Path $HookDir $script:Cfg.traces.dir
+        if (-not (Test-Path $dir)) { return }
+        $keep = [int]$script:Cfg.traces.retain_days
+        $keepState = [int]$script:Cfg.traces.state_retain_days
+        $n = 0
+        if ($keep -gt 0) {
+            $cut = (Get-Date).AddDays(-$keep)
+            foreach ($f in (Get-ChildItem -Path $dir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue)) {
+                if ($f.LastWriteTime -lt $cut) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue; $n++ }
+            }
+        }
+        $m = 0
+        $sdir = Join-Path $dir '.state'
+        if ($keepState -gt 0 -and (Test-Path $sdir)) {
+            $cutS = (Get-Date).AddDays(-$keepState)
+            foreach ($f in (Get-ChildItem -Path $sdir -File -ErrorAction SilentlyContinue)) {
+                if ($f.LastWriteTime -lt $cutS) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue; $m++ }
+            }
+        }
+        # Deleting without a trace means nobody can answer "where did my records
+        # go". Only record when something actually went.
+        if ($n -gt 0 -or $m -gt 0) {
+            Write-Trace @{ gate = 'housekeeping'; action = 'prune'; rule = 'L0-PRUNE'
+                           traces_removed = $n; state_removed = $m
+                           retain_days = $keep; state_retain_days = $keepState }
+        }
+    } catch { }
+}
+
 function Get-StatePath($sessionId) {
     $dir = Join-Path (Join-Path $HookDir $script:Cfg.traces.dir) '.state'
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -252,6 +291,7 @@ $sid = [string]$N['session']
 # ============================================================ SessionStart ===
 
 if ($evt -eq 'session_start') {
+    Prune-Traces          # once per new window; see the function for why here
     if (-not (Gate-On 'session_start')) { exit 0 }
     $g = $script:Cfg.gates.session_start
     # HookDir = <skills>\project-delivery\hooks  ->  two levels up is the repo root.

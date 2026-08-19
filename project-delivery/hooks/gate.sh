@@ -269,6 +269,26 @@ fill() { # fill <template> <token> <value>
 
 # ========================================================== SessionStart =====
 if [ "$EVT" = "session_start" ]; then
+  # Housekeeping, once per new window. retain_days used to sit in config.json
+  # with nothing reading it -- a config key that does nothing reads as "someone
+  # is managing this", which is worse than having no key. .state is the one that
+  # actually piles up: one file per session, forever, somewhere nobody looks.
+  PRUNED_T=0; PRUNED_S=0
+  KEEP="$(q "$CFGTXT" '.traces.retain_days')"
+  KEEP_S="$(q "$CFGTXT" '.traces.state_retain_days')"
+  if [ -n "$KEEP" ] && [ "$KEEP" -gt 0 ] 2>/dev/null && [ -d "$TDIR" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && rm -f "$f" && PRUNED_T=$((PRUNED_T + 1))
+    done <<< "$(find "$TDIR" -maxdepth 1 -name '*.jsonl' -type f -mtime +"$KEEP" 2>/dev/null)"
+  fi
+  if [ -n "$KEEP_S" ] && [ "$KEEP_S" -gt 0 ] 2>/dev/null && [ -d "$SDIR" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && rm -f "$f" && PRUNED_S=$((PRUNED_S + 1))
+    done <<< "$(find "$SDIR" -maxdepth 1 -type f -mtime +"$KEEP_S" 2>/dev/null)"
+  fi
+  if [ "$PRUNED_T" -gt 0 ] || [ "$PRUNED_S" -gt 0 ]; then
+    trace "{\"rule\":\"L0-PRUNE\",\"gate\":\"housekeeping\",\"action\":\"prune\",\"traces_removed\":$PRUNED_T,\"state_removed\":$PRUNED_S,\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  fi
   gate_on session_start || exit 0
   SKILLS="$(cd "$HOOK_DIR/../.." && pwd)"
   TXT="$(q "$CFGTXT" '.gates.session_start.inject')"
