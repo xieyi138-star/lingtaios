@@ -229,17 +229,20 @@ nf() {
 # template -- but JSON first: stderr goes through the console codepage and these
 # reasons are Chinese.
 emit_decision() {
-  local tpl
+  local tpl reason
   tpl="$(q "$CFGTXT" "$OUTQ.$1")"
   if [ -z "$tpl" ]; then
     printf '%s' "$2" >&2
     exit 2
   fi
-  printf '%s' "$tpl" | REASON="$(json_escape "$2")" "$JSON_TOOL" -c '
-import os,sys
-sys.stdout.write(sys.stdin.read().replace("%REASON%", os.environ["REASON"]))
-' 2>/dev/null || printf '%s' "$2" >&2
-  printf '\n'
+  reason="$(json_escape "$2")"
+  # !! Pure bash substitution -- do NOT pipe through "$JSON_TOOL" here.
+  #    JSON_TOOL is jq on most machines and python only where jq is missing.
+  #    The first version fed a python snippet to it unconditionally: on Windows
+  #    Git Bash (no jq) it worked, so 60/60 passed locally, while on a real
+  #    macOS runner jq got handed python source and every blocking assertion
+  #    failed -- 9 red. Exactly the "Git Bash is not Linux" gap the CI exists for.
+  printf '%s\n' "${tpl//%REASON%/$reason}"
 }
 
 SID="$(nf session)"
